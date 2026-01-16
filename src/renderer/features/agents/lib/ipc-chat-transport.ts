@@ -240,6 +240,13 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
+                console.error(`[SD] R:ERROR_CHUNK sub=${subId}`, {
+                  errorText: chunk.errorText,
+                  debugInfo: chunk.debugInfo,
+                  category: chunk.debugInfo?.category,
+                  fullChunk: chunk,
+                })
+                
                 // Track error in Sentry
                 const category = chunk.debugInfo?.category || "UNKNOWN"
                 Sentry.captureException(
@@ -258,25 +265,39 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   },
                 )
 
-                // Show toast based on error category
+                // Show toast based on error category with full error details
                 const config = ERROR_TOAST_CONFIG[category]
 
                 if (config) {
                   toast.error(config.title, {
-                    description: config.description,
-                    duration: 8000,
+                    description: `${config.description}\n\nError: ${chunk.errorText || "Unknown error"}`,
+                    duration: 12000,
                     action: config.action
                       ? {
                           label: config.action.label,
                           onClick: config.action.onClick,
                         }
-                      : undefined,
+                      : {
+                          label: "Copy error",
+                          onClick: () => {
+                            navigator.clipboard.writeText(
+                              `Error: ${chunk.errorText || "Unknown"}\nCategory: ${category}\nDebug: ${JSON.stringify(chunk.debugInfo, null, 2)}`
+                            )
+                          },
+                        },
                   })
                 } else {
-                  toast.error("Something went wrong", {
-                    description:
-                      chunk.errorText || "An unexpected error occurred",
-                    duration: 8000,
+                  toast.error("Claude error", {
+                    description: chunk.errorText || "An unexpected error occurred",
+                    duration: 12000,
+                    action: {
+                      label: "Copy error",
+                      onClick: () => {
+                        navigator.clipboard.writeText(
+                          `Error: ${chunk.errorText || "Unknown"}\nDebug: ${JSON.stringify(chunk.debugInfo, null, 2)}`
+                        )
+                      },
+                    },
                   })
                 }
               }
