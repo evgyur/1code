@@ -39,12 +39,13 @@ jobs:
       - name: Download Claude binary
         run: |
           echo "Downloading Claude binary for Windows..."
-          bun run claude:download
+          node scripts/download-claude-binary.mjs
           if (Test-Path "resources\bin\win32-x64\claude.exe") {
             echo "✓ Binary downloaded successfully"
             Get-Item "resources\bin\win32-x64\claude.exe" | Select-Object Name, Length
           } else {
             echo "✗ Binary not found after download"
+            Get-ChildItem -Recurse "resources\bin" -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
       
