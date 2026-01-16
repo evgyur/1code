@@ -221,8 +221,19 @@ export const claudeRouter = router({
         }
 
         ;(async () => {
+          console.log(`[claude] ASYNC_START sub=${subId}`, {
+            subChatId: input.subChatId,
+            chatId: input.chatId,
+            promptLength: input.prompt.length,
+            cwd: input.cwd,
+            mode: input.mode,
+            hasSessionId: !!input.sessionId,
+            hasImages: !!input.images?.length,
+          })
+          
           try {
             const db = getDatabase()
+            console.log(`[claude] DB_ACCESSED sub=${subId}`)
 
             // 1. Get existing messages from DB
             const existing = db
@@ -559,15 +570,33 @@ export const claudeRouter = router({
             }
 
             // 5. Run Claude SDK
-            let stream
+            let stream: AsyncIterable<any>
             try {
+              console.log(`[claude] Creating query stream:`, {
+                subChatId: input.subChatId.slice(-8),
+                cwd: input.cwd,
+                mode: input.mode,
+                hasToken: !!claudeCodeToken,
+                binaryPath: claudeBinaryPath ? "found" : "missing",
+                resumeSessionId: resumeSessionId || "new",
+                promptLength: typeof prompt === "string" ? prompt.length : "async",
+                queryOptionsKeys: Object.keys(queryOptions),
+              })
               stream = claudeQuery(queryOptions)
+              console.log(`[claude] Query stream created successfully, starting iteration...`)
+              
+              // Verify stream is actually an async iterable
+              if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
+                throw new Error(`Stream is not async iterable: ${typeof stream}`)
+              }
             } catch (queryError) {
+              const errorMessage = queryError instanceof Error ? queryError.message : String(queryError)
               console.error(
-                "[CLAUDE] ✗ Failed to create SDK query:",
+                "[claude] ✗ Failed to create SDK query:",
+                errorMessage,
                 queryError,
               )
-              emitError(queryError, "Failed to start Claude query")
+              emitError(queryError, `Failed to start Claude query: ${errorMessage}`)
               console.log(`[SD] M:END sub=${subId} reason=query_error n=${chunkCount}`)
               safeEmit({ type: "finish" } as UIMessageChunk)
               safeComplete()
@@ -582,17 +611,24 @@ export const claudeRouter = router({
             try {
               console.log(`[claude] Starting to iterate over stream, subChatId: ${input.subChatId.slice(-8)}`)
               let streamIterationCount = 0
+              let lastMessageType: string | null = null
+              
               for await (const msg of stream) {
                 if (abortController.signal.aborted) {
-                  console.log(`[claude] Stream aborted, breaking loop`)
+                  console.log(`[claude] Stream aborted, breaking loop at iteration ${streamIterationCount}`)
                   break
                 }
 
                 messageCount++
                 streamIterationCount++
+                lastMessageType = (msg as any)?.type || "unknown"
                 
                 if (streamIterationCount === 1) {
-                  console.log(`[claude] Received first message from stream, type: ${(msg as any)?.type}`)
+                  console.log(`[claude] FIRST_MSG sub=${subId} type=${lastMessageType}`, msg)
+                }
+                
+                if (streamIterationCount <= 3) {
+                  console.log(`[claude] MSG_${streamIterationCount} sub=${subId} type=${lastMessageType}`)
                 }
 
                 // Log raw message for debugging
