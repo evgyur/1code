@@ -69,10 +69,15 @@ function downloadFile(url, destPath) {
             return request(res.headers.location)
           }
 
+          if (res.statusCode === 404) {
+            file.close()
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
+            return reject(new Error(`HTTP 404: Binary not found for version ${version} on platform ${platform.dir}. This version may not be available for Windows.`))
+          }
           if (res.statusCode !== 200) {
             file.close()
-            fs.unlinkSync(destPath)
-            return reject(new Error(`HTTP ${res.statusCode}`))
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
+            return reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage || 'Unknown error'}`))
           }
 
           const totalSize = parseInt(res.headers["content-length"], 10)
@@ -146,8 +151,9 @@ async function getLatestVersion() {
     // Fallback
   }
 
-  // Fallback to known version
-  return "2.1.5"
+  // Fallback to known working version (2.0.61 has Windows support)
+  console.warn("Could not fetch latest version, using fallback: 2.0.61")
+  return "2.0.61"
 }
 
 /**
@@ -174,11 +180,20 @@ async function downloadPlatform(version, platformKey, manifest) {
   }
 
   const expectedHash = platformManifest.checksum
+  // For Windows, the binary is claude.exe, but the URL uses 'claude'
+  // For other platforms, it's just 'claude'
   const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/claude`
 
   console.log(`\nDownloading Claude Code for ${platformKey}...`)
   console.log(`  URL: ${downloadUrl}`)
   console.log(`  Size: ${(platformManifest.size / 1024 / 1024).toFixed(1)} MB`)
+  
+  // Check if platform is available in manifest
+  if (!platformManifest) {
+    console.error(`  ✗ Platform ${platform.dir} not available for version ${version}`)
+    console.error(`  Available platforms: ${Object.keys(manifest.platforms || {}).join(", ")}`)
+    return false
+  }
 
   // Check if already downloaded with correct hash
   if (fs.existsSync(targetPath)) {
