@@ -142,18 +142,22 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     return new ReadableStream({
       start: (controller) => {
-        console.error(`\n========== CREATING SUBSCRIPTION ==========`)
-        console.error(`SubChatId: ${this.config.subChatId}`)
-        console.error(`ChatId: ${this.config.chatId}`)
-        console.error(`Prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`)
-        console.error(`Prompt Length: ${prompt.length}`)
-        console.error(`CWD: ${this.config.cwd}`)
-        console.error(`Mode: ${currentMode}`)
-        console.error(`SessionId: ${sessionId || 'none'}`)
-        console.error(`Images: ${images.length}`)
-        console.error(`MaxThinkingTokens: ${maxThinkingTokens || 'none'}`)
-        console.error(`Model: ${modelString || 'default'}`)
-        console.error(`==========================================\n`)
+        console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+        console.error(`║ [RENDERER] CREATING CLAUDE SUBSCRIPTION                  ║`)
+        console.error(`╠═══════════════════════════════════════════════════════════╣`)
+        console.error(`║ SubChatId: ${this.config.subChatId.padEnd(47)}║`)
+        console.error(`║ ChatId: ${this.config.chatId.padEnd(51)}║`)
+        console.error(`║ CWD: ${this.config.cwd.padEnd(53)}║`)
+        console.error(`║ Mode: ${currentMode.padEnd(53)}║`)
+        console.error(`║ Prompt: "${prompt.substring(0, 45)}${prompt.length > 45 ? '...' : ''}"`.padEnd(59) + `║`)
+        console.error(`║ Prompt Length: ${String(prompt.length).padEnd(42)}║`)
+        console.error(`║ SessionId: ${(sessionId || 'none').padEnd(48)}║`)
+        console.error(`║ Images: ${String(images.length).padEnd(51)}║`)
+        console.error(`║ MaxThinkingTokens: ${String(maxThinkingTokens || 'none').padEnd(37)}║`)
+        console.error(`║ Model: ${(modelString || 'default').padEnd(50)}║`)
+        console.error(`╚═══════════════════════════════════════════════════════════╝\n`)
+        console.error(`⚠️  NOTE: Backend logs are in MAIN PROCESS console (View → Toggle Developer Tools → Main Process)`)
+        console.error(`\n`)
         
         let subscriptionCreated = false
         let subscriptionError: Error | null = null
@@ -174,23 +178,33 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             onData: (chunk: UIMessageChunk) => {
               if (!subscriptionCreated) {
                 subscriptionCreated = true
-                console.error(`\n========== FIRST CHUNK RECEIVED ==========`)
-                console.error(`Type: ${chunk.type}`)
-                console.error(`Full Chunk JSON:\n${JSON.stringify(chunk, null, 2)}`)
+                console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+                console.error(`║ [RENDERER] FIRST CHUNK RECEIVED                          ║`)
+                console.error(`╠═══════════════════════════════════════════════════════════╣`)
+                console.error(`║ Type: ${String(chunk.type).padEnd(53)}║`)
+                console.error(`╚═══════════════════════════════════════════════════════════╝`)
+                console.error(`\nFULL CHUNK JSON:\n${JSON.stringify(chunk, null, 2)}\n`)
+                
                 if (chunk.type === "error") {
-                  const errorChunk = chunk as any
-                  console.error(`\n*** ERROR CHUNK DETAILS ***`)
-                  console.error(`Error Text: "${errorChunk.errorText || 'MISSING'}"`)
-                  console.error(`Debug Info:`, errorChunk.debugInfo || 'MISSING')
-                  console.error(`Category: ${errorChunk.debugInfo?.category || 'MISSING'}`)
-                  console.error(`Context: ${errorChunk.debugInfo?.context || 'MISSING'}`)
-                  console.error(`CWD: ${errorChunk.debugInfo?.cwd || 'MISSING'}`)
-                  console.error(`Mode: ${errorChunk.debugInfo?.mode || 'MISSING'}`)
-                  console.error(`Error Message: ${errorChunk.debugInfo?.errorMessage || 'MISSING'}`)
-                  console.error(`Error Stack: ${errorChunk.debugInfo?.errorStack || 'MISSING'}`)
-                  console.error(`****************************************\n`)
+                  const err = chunk as any
+                  console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+                  console.error(`║ ⚠️  ERROR CHUNK RECEIVED - DETAILS BELOW                  ║`)
+                  console.error(`╠═══════════════════════════════════════════════════════════╣`)
+                  console.error(`║ Error Text: ${(err.errorText || 'MISSING').substring(0, 47).padEnd(47)}║`)
+                  console.error(`║ Category: ${String(err.debugInfo?.category || 'MISSING').padEnd(50)}║`)
+                  console.error(`║ Context: ${String(err.debugInfo?.context || 'MISSING').padEnd(51)}║`)
+                  console.error(`║ CWD: ${String(err.debugInfo?.cwd || 'MISSING').padEnd(54)}║`)
+                  console.error(`║ Mode: ${String(err.debugInfo?.mode || 'MISSING').padEnd(52)}║`)
+                  console.error(`╚═══════════════════════════════════════════════════════════╝`)
+                  console.error(`\nFULL ERROR TEXT: "${err.errorText || 'MISSING'}"`)
+                  console.error(`\nDEBUG INFO:\n${JSON.stringify(err.debugInfo, null, 2)}`)
+                  console.error(`\nERROR MESSAGE: ${err.debugInfo?.errorMessage || 'MISSING'}`)
+                  console.error(`\nERROR STACK:\n${err.debugInfo?.errorStack || 'MISSING'}\n`)
+                } else if (chunk.type === "finish") {
+                  console.error(`\n⚠️  WARNING: Stream completed with 'finish' but no Claude output!`)
+                  console.error(`This usually means the backend stream ended immediately.`)
+                  console.error(`Check MAIN PROCESS console for backend logs.\n`)
                 }
-                console.error(`==========================================\n`)
               }
               chunkCount++
               lastChunkType = chunk.type
