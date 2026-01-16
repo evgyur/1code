@@ -240,12 +240,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
-                console.error(`[SD] R:ERROR_CHUNK sub=${subId}`, {
-                  errorText: chunk.errorText,
-                  debugInfo: chunk.debugInfo,
-                  category: chunk.debugInfo?.category,
-                  fullChunk: chunk,
-                })
+                console.error(`[SD] R:ERROR_CHUNK sub=${subId}`)
+                console.error(`[SD] R:ERROR_TEXT sub=${subId}:`, chunk.errorText)
+                console.error(`[SD] R:ERROR_DEBUG sub=${subId}:`, JSON.stringify(chunk.debugInfo, null, 2))
+                console.error(`[SD] R:ERROR_CATEGORY sub=${subId}:`, chunk.debugInfo?.category || "UNKNOWN")
+                console.error(`[SD] R:ERROR_FULL sub=${subId}:`, chunk)
                 
                 // Track error in Sentry
                 const category = chunk.debugInfo?.category || "UNKNOWN"
