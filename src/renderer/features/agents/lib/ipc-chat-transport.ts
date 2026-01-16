@@ -142,15 +142,18 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     return new ReadableStream({
       start: (controller) => {
-        console.log(`[SD] R:CREATING_SUB sub=${subId}`, {
-          subChatId: this.config.subChatId,
-          chatId: this.config.chatId,
-          promptLength: prompt.length,
-          cwd: this.config.cwd,
-          mode: currentMode,
-          hasSessionId: !!sessionId,
-          hasImages: images.length > 0,
-        })
+        console.error(`\n========== CREATING SUBSCRIPTION ==========`)
+        console.error(`SubChatId: ${this.config.subChatId}`)
+        console.error(`ChatId: ${this.config.chatId}`)
+        console.error(`Prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`)
+        console.error(`Prompt Length: ${prompt.length}`)
+        console.error(`CWD: ${this.config.cwd}`)
+        console.error(`Mode: ${currentMode}`)
+        console.error(`SessionId: ${sessionId || 'none'}`)
+        console.error(`Images: ${images.length}`)
+        console.error(`MaxThinkingTokens: ${maxThinkingTokens || 'none'}`)
+        console.error(`Model: ${modelString || 'default'}`)
+        console.error(`==========================================\n`)
         
         let subscriptionCreated = false
         let subscriptionError: Error | null = null
@@ -171,14 +174,23 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             onData: (chunk: UIMessageChunk) => {
               if (!subscriptionCreated) {
                 subscriptionCreated = true
-                console.log(`[SD] R:FIRST_CHUNK sub=${subId} type=${chunk.type}`)
-                // Log full chunk as JSON to see exact structure
-                console.error(`[SD] R:FIRST_CHUNK_FULL sub=${subId}:`, JSON.stringify(chunk, null, 2))
+                console.error(`\n========== FIRST CHUNK RECEIVED ==========`)
+                console.error(`Type: ${chunk.type}`)
+                console.error(`Full Chunk JSON:\n${JSON.stringify(chunk, null, 2)}`)
                 if (chunk.type === "error") {
-                  console.error(`[SD] R:FIRST_CHUNK_IS_ERROR sub=${subId}`)
-                  console.error(`[SD] R:ERROR_TEXT="${(chunk as any).errorText}"`)
-                  console.error(`[SD] R:ERROR_DEBUG=`, (chunk as any).debugInfo)
+                  const errorChunk = chunk as any
+                  console.error(`\n*** ERROR CHUNK DETAILS ***`)
+                  console.error(`Error Text: "${errorChunk.errorText || 'MISSING'}"`)
+                  console.error(`Debug Info:`, errorChunk.debugInfo || 'MISSING')
+                  console.error(`Category: ${errorChunk.debugInfo?.category || 'MISSING'}`)
+                  console.error(`Context: ${errorChunk.debugInfo?.context || 'MISSING'}`)
+                  console.error(`CWD: ${errorChunk.debugInfo?.cwd || 'MISSING'}`)
+                  console.error(`Mode: ${errorChunk.debugInfo?.mode || 'MISSING'}`)
+                  console.error(`Error Message: ${errorChunk.debugInfo?.errorMessage || 'MISSING'}`)
+                  console.error(`Error Stack: ${errorChunk.debugInfo?.errorStack || 'MISSING'}`)
+                  console.error(`****************************************\n`)
                 }
+                console.error(`==========================================\n`)
               }
               chunkCount++
               lastChunkType = chunk.type

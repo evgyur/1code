@@ -201,12 +201,18 @@ export const claudeRouter = router({
             error instanceof Error ? error.message : String(error)
           const errorStack = error instanceof Error ? error.stack : undefined
 
-          console.error(`\n[claude] ✗ ERROR: ${context}`)
-          console.error(`[claude] Message: ${errorMessage}`)
-          if (errorStack) console.error(`[claude] Stack:\n${errorStack}`)
-          console.error(`[claude] CWD: ${input.cwd}`)
-          console.error(`[claude] Mode: ${input.mode}`)
-          console.error(`[claude] SubChatId: ${input.subChatId}\n`)
+          console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+          console.error(`║ ⚠️  ERROR EMITTED TO FRONTEND                              ║`)
+          console.error(`╠═══════════════════════════════════════════════════════════╣`)
+          console.error(`║ Context: ${context.padEnd(47)}║`)
+          console.error(`║ Error: ${errorMessage.substring(0, 47).padEnd(47)}║`)
+          console.error(`║ CWD: ${input.cwd.padEnd(53)}║`)
+          console.error(`║ Mode: ${input.mode.padEnd(53)}║`)
+          console.error(`║ SubChatId: ${input.subChatId.padEnd(45)}║`)
+          console.error(`╚═══════════════════════════════════════════════════════════╝`)
+          if (errorStack) {
+            console.error(`\nERROR STACK:\n${errorStack}\n`)
+          }
 
           // Send detailed error to frontend (safely) - ALWAYS include debug info
           safeEmit({
@@ -225,28 +231,36 @@ export const claudeRouter = router({
         }
 
         ;(async () => {
-          console.log(`[claude] ASYNC_START sub=${subId}`, {
-            subChatId: input.subChatId,
-            chatId: input.chatId,
-            promptLength: input.prompt.length,
-            cwd: input.cwd,
-            mode: input.mode,
-            hasSessionId: !!input.sessionId,
-            hasImages: !!input.images?.length,
-          })
+          console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+          console.error(`║ BACKEND: ASYNC FUNCTION STARTED                           ║`)
+          console.error(`╠═══════════════════════════════════════════════════════════╣`)
+          console.error(`║ SubChatId: ${input.subChatId.padEnd(47)}║`)
+          console.error(`║ ChatId: ${input.chatId.padEnd(51)}║`)
+          console.error(`║ CWD: ${input.cwd.padEnd(53)}║`)
+          console.error(`║ Mode: ${input.mode.padEnd(53)}║`)
+          console.error(`║ Prompt: "${input.prompt.substring(0, 45)}${input.prompt.length > 45 ? '...' : ''}"`.padEnd(59) + `║`)
+          console.error(`║ Prompt Length: ${String(input.prompt.length).padEnd(42)}║`)
+          console.error(`║ SessionId: ${(input.sessionId || 'none').padEnd(48)}║`)
+          console.error(`║ Images: ${String(input.images?.length || 0).padEnd(51)}║`)
+          console.error(`╚═══════════════════════════════════════════════════════════╝\n`)
           
           // Early validation - check cwd exists before doing anything
+          console.error(`[BACKEND] Step 1: Validating CWD...`)
           try {
             const cwdStat = await fs.stat(input.cwd)
             if (!cwdStat.isDirectory()) {
+              console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: Not a directory`)
               emitError(new Error(`CWD is not a directory: ${input.cwd}`), "Invalid workspace path")
               safeEmit({ type: "finish" } as UIMessageChunk)
               safeComplete()
               return
             }
-            console.log(`[claude] CWD_VALIDATED sub=${subId} path=${input.cwd}`)
+            console.error(`[BACKEND] ✓ CWD VALIDATED: ${input.cwd}`)
           } catch (cwdError) {
             const errorMsg = cwdError instanceof Error ? cwdError.message : String(cwdError)
+            console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: ${errorMsg}`)
+            console.error(`[BACKEND] CWD Path: ${input.cwd}`)
+            console.error(`[BACKEND] Error Details:`, cwdError)
             emitError(new Error(`CWD does not exist or is inaccessible: ${input.cwd} - ${errorMsg}`), "Workspace path error")
             safeEmit({ type: "finish" } as UIMessageChunk)
             safeComplete()
@@ -254,8 +268,9 @@ export const claudeRouter = router({
           }
           
           try {
+            console.error(`[BACKEND] Step 2: Accessing database...`)
             const db = getDatabase()
-            console.log(`[claude] DB_ACCESSED sub=${subId}`)
+            console.error(`[BACKEND] ✓ Database accessed`)
 
             // 1. Get existing messages from DB
             const existing = db
@@ -298,10 +313,16 @@ export const claudeRouter = router({
             }
 
             // 3. Get Claude SDK
+            console.error(`[BACKEND] Step 3: Loading Claude SDK...`)
             let claudeQuery
             try {
               claudeQuery = await getClaudeQuery()
+              console.error(`[BACKEND] ✓ Claude SDK loaded successfully`)
             } catch (sdkError) {
+              const errorMsg = sdkError instanceof Error ? sdkError.message : String(sdkError)
+              const errorStack = sdkError instanceof Error ? sdkError.stack : undefined
+              console.error(`[BACKEND] ✗ SDK LOAD FAILED: ${errorMsg}`)
+              console.error(`[BACKEND] Error Stack:`, errorStack)
               emitError(sdkError, "Failed to load Claude SDK")
               console.log(`[SD] M:END sub=${subId} reason=sdk_load_error n=${chunkCount}`)
               safeEmit({ type: "finish" } as UIMessageChunk)
@@ -461,12 +482,15 @@ export const claudeRouter = router({
             }
 
             // Get bundled Claude binary path
+            console.error(`[BACKEND] Step 4: Checking Claude binary...`)
             const claudeBinaryPath = getBundledClaudeBinaryPath()
+            console.error(`[BACKEND] Binary Path: ${claudeBinaryPath}`)
             
             // Validate binary exists
             try {
               const binaryExists = await fs.access(claudeBinaryPath).then(() => true).catch(() => false)
               if (!binaryExists) {
+                console.error(`[BACKEND] ✗ BINARY NOT FOUND at: ${claudeBinaryPath}`)
                 emitError(
                   new Error(`Claude binary not found at: ${claudeBinaryPath}\n\nRun 'bun run claude:download' to download it.`),
                   "Claude binary missing"
@@ -475,10 +499,13 @@ export const claudeRouter = router({
                 safeComplete()
                 return
               }
-              console.log(`[claude] BINARY_FOUND sub=${subId} path=${claudeBinaryPath}`)
+              console.error(`[BACKEND] ✓ Binary found and accessible`)
             } catch (binaryError) {
+              const errorMsg = binaryError instanceof Error ? binaryError.message : String(binaryError)
+              console.error(`[BACKEND] ✗ BINARY CHECK FAILED: ${errorMsg}`)
+              console.error(`[BACKEND] Binary Path: ${claudeBinaryPath}`)
               emitError(
-                new Error(`Failed to check Claude binary: ${binaryError instanceof Error ? binaryError.message : String(binaryError)}`),
+                new Error(`Failed to check Claude binary: ${errorMsg}`),
                 "Binary validation error"
               )
               safeEmit({ type: "finish" } as UIMessageChunk)
@@ -615,32 +642,33 @@ export const claudeRouter = router({
             }
 
             // 5. Run Claude SDK
+            console.error(`[BACKEND] Step 5: Creating Claude query stream...`)
+            console.error(`[BACKEND] Query Options:`, {
+              cwd: input.cwd,
+              mode: input.mode,
+              hasToken: !!claudeCodeToken,
+              binaryPath: claudeBinaryPath,
+              resumeSessionId: resumeSessionId || "new",
+              promptType: typeof prompt,
+              promptLength: typeof prompt === "string" ? prompt.length : "async",
+            })
+            
             let stream: AsyncIterable<any>
             try {
-              console.log(`[claude] Creating query stream:`, {
-                subChatId: input.subChatId.slice(-8),
-                cwd: input.cwd,
-                mode: input.mode,
-                hasToken: !!claudeCodeToken,
-                binaryPath: claudeBinaryPath ? "found" : "missing",
-                resumeSessionId: resumeSessionId || "new",
-                promptLength: typeof prompt === "string" ? prompt.length : "async",
-                queryOptionsKeys: Object.keys(queryOptions),
-              })
               stream = claudeQuery(queryOptions)
-              console.log(`[claude] Query stream created successfully, starting iteration...`)
+              console.error(`[BACKEND] ✓ Query stream created`)
               
               // Verify stream is actually an async iterable
               if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
                 throw new Error(`Stream is not async iterable: ${typeof stream}`)
               }
+              console.error(`[BACKEND] ✓ Stream is async iterable`)
             } catch (queryError) {
               const errorMessage = queryError instanceof Error ? queryError.message : String(queryError)
-              console.error(
-                "[claude] ✗ Failed to create SDK query:",
-                errorMessage,
-                queryError,
-              )
+              const errorStack = queryError instanceof Error ? queryError.stack : undefined
+              console.error(`[BACKEND] ✗ QUERY CREATION FAILED: ${errorMessage}`)
+              console.error(`[BACKEND] Error Stack:`, errorStack)
+              console.error(`[BACKEND] Query Options:`, JSON.stringify(queryOptions, null, 2))
               emitError(queryError, `Failed to start Claude query: ${errorMessage}`)
               console.log(`[SD] M:END sub=${subId} reason=query_error n=${chunkCount}`)
               safeEmit({ type: "finish" } as UIMessageChunk)
@@ -654,13 +682,13 @@ export const claudeRouter = router({
             let exitPlanModeToolCallId: string | null = null // Track ExitPlanMode's toolCallId
 
             try {
-              console.log(`[claude] Starting to iterate over stream, subChatId: ${input.subChatId.slice(-8)}`)
+              console.error(`[BACKEND] Step 6: Starting stream iteration...`)
               let streamIterationCount = 0
               let lastMessageType: string | null = null
               
               for await (const msg of stream) {
                 if (abortController.signal.aborted) {
-                  console.log(`[claude] Stream aborted, breaking loop at iteration ${streamIterationCount}`)
+                  console.error(`[BACKEND] Stream aborted at iteration ${streamIterationCount}`)
                   break
                 }
 
@@ -669,11 +697,16 @@ export const claudeRouter = router({
                 lastMessageType = (msg as any)?.type || "unknown"
                 
                 if (streamIterationCount === 1) {
-                  console.log(`[claude] FIRST_MSG sub=${subId} type=${lastMessageType}`, msg)
+                  console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+                  console.error(`║ FIRST MESSAGE FROM STREAM                                 ║`)
+                  console.error(`╠═══════════════════════════════════════════════════════════╣`)
+                  console.error(`║ Type: ${String(lastMessageType).padEnd(53)}║`)
+                  console.error(`╚═══════════════════════════════════════════════════════════╝`)
+                  console.error(`\nFULL MESSAGE:\n${JSON.stringify(msg, null, 2)}\n`)
                 }
                 
                 if (streamIterationCount <= 3) {
-                  console.log(`[claude] MSG_${streamIterationCount} sub=${subId} type=${lastMessageType}`)
+                  console.error(`[BACKEND] Message ${streamIterationCount}: type=${lastMessageType}`)
                 }
 
                 // Log raw message for debugging
