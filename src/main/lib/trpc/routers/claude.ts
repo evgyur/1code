@@ -231,6 +231,24 @@ export const claudeRouter = router({
             hasImages: !!input.images?.length,
           })
           
+          // Early validation - check cwd exists before doing anything
+          try {
+            const cwdStat = await fs.stat(input.cwd)
+            if (!cwdStat.isDirectory()) {
+              emitError(new Error(`CWD is not a directory: ${input.cwd}`), "Invalid workspace path")
+              safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
+            console.log(`[claude] CWD_VALIDATED sub=${subId} path=${input.cwd}`)
+          } catch (cwdError) {
+            const errorMsg = cwdError instanceof Error ? cwdError.message : String(cwdError)
+            emitError(new Error(`CWD does not exist or is inaccessible: ${input.cwd} - ${errorMsg}`), "Workspace path error")
+            safeEmit({ type: "finish" } as UIMessageChunk)
+            safeComplete()
+            return
+          }
+          
           try {
             const db = getDatabase()
             console.log(`[claude] DB_ACCESSED sub=${subId}`)
@@ -440,6 +458,29 @@ export const claudeRouter = router({
 
             // Get bundled Claude binary path
             const claudeBinaryPath = getBundledClaudeBinaryPath()
+            
+            // Validate binary exists
+            try {
+              const binaryExists = await fs.access(claudeBinaryPath).then(() => true).catch(() => false)
+              if (!binaryExists) {
+                emitError(
+                  new Error(`Claude binary not found at: ${claudeBinaryPath}\n\nRun 'bun run claude:download' to download it.`),
+                  "Claude binary missing"
+                )
+                safeEmit({ type: "finish" } as UIMessageChunk)
+                safeComplete()
+                return
+              }
+              console.log(`[claude] BINARY_FOUND sub=${subId} path=${claudeBinaryPath}`)
+            } catch (binaryError) {
+              emitError(
+                new Error(`Failed to check Claude binary: ${binaryError instanceof Error ? binaryError.message : String(binaryError)}`),
+                "Binary validation error"
+              )
+              safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
 
             const resumeSessionId = input.sessionId || existingSessionId || undefined
             const queryOptions = {
