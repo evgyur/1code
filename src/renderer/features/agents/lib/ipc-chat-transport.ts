@@ -142,6 +142,19 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     return new ReadableStream({
       start: (controller) => {
+        console.log(`[SD] R:CREATING_SUB sub=${subId}`, {
+          subChatId: this.config.subChatId,
+          chatId: this.config.chatId,
+          promptLength: prompt.length,
+          cwd: this.config.cwd,
+          mode: currentMode,
+          hasSessionId: !!sessionId,
+          hasImages: images.length > 0,
+        })
+        
+        let subscriptionCreated = false
+        let subscriptionError: Error | null = null
+        
         const sub = trpcClient.claude.chat.subscribe(
           {
             subChatId: this.config.subChatId,
@@ -156,6 +169,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           },
           {
             onData: (chunk: UIMessageChunk) => {
+              if (!subscriptionCreated) {
+                subscriptionCreated = true
+                console.log(`[SD] R:FIRST_CHUNK sub=${subId} type=${chunk.type}`)
+              }
               chunkCount++
               lastChunkType = chunk.type
 
@@ -287,8 +304,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               }
             },
             onError: (err: Error) => {
-              console.error(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
+              subscriptionError = err
+              console.error(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} subscriptionCreated=${subscriptionCreated}`)
+              console.error(`[SD] R:ERROR_MESSAGE sub=${subId}:`, err.message)
               console.error(`[SD] R:ERROR_STACK sub=${subId}:`, err.stack)
+              console.error(`[SD] R:ERROR_FULL sub=${subId}:`, err)
+              
               // Track transport errors in Sentry
               Sentry.captureException(err, {
                 tags: {
@@ -301,20 +322,28 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   subChatId: this.config.subChatId,
                   chunkCount,
                   lastChunkType,
+                  subscriptionCreated,
                 },
               })
 
-              // Show user-friendly error toast
-              toast.error("Connection error", {
-                description: err.message || "Failed to connect to Claude. Check console for details.",
-                duration: 8000,
+              // Show user-friendly error toast with full error details
+              const errorDetails = err.message || err.toString() || "Unknown error"
+              toast.error("Claude connection error", {
+                description: `${errorDetails}${subscriptionCreated ? "" : " (subscription never received data)"}`,
+                duration: 10000,
+                action: {
+                  label: "Copy error",
+                  onClick: () => {
+                    navigator.clipboard.writeText(`Error: ${errorDetails}\nStack: ${err.stack || "No stack"}`)
+                  },
+                },
               })
 
               // Only error the controller if it's not already closed
               try {
                 controller.error(err)
               } catch (e) {
-                console.error(`[SD] R:ERROR_CONTROLLER_ALREADY_CLOSED sub=${subId}`)
+                console.error(`[SD] R:ERROR_CONTROLLER_ALREADY_CLOSED sub=${subId}`, e)
               }
             },
             onComplete: () => {
