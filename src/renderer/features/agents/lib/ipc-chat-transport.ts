@@ -172,6 +172,13 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               if (!subscriptionCreated) {
                 subscriptionCreated = true
                 console.log(`[SD] R:FIRST_CHUNK sub=${subId} type=${chunk.type}`)
+                // Log full chunk as JSON to see exact structure
+                console.error(`[SD] R:FIRST_CHUNK_FULL sub=${subId}:`, JSON.stringify(chunk, null, 2))
+                if (chunk.type === "error") {
+                  console.error(`[SD] R:FIRST_CHUNK_IS_ERROR sub=${subId}`)
+                  console.error(`[SD] R:ERROR_TEXT="${(chunk as any).errorText}"`)
+                  console.error(`[SD] R:ERROR_DEBUG=`, (chunk as any).debugInfo)
+                }
               }
               chunkCount++
               lastChunkType = chunk.type
