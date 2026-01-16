@@ -259,18 +259,21 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
-                const errorText = chunk.errorText || "Unknown error"
-                const category = chunk.debugInfo?.category || "UNKNOWN"
-                
-                // Log error details clearly
-                console.error(`\n========== CLAUDE ERROR ==========`)
-                console.error(`Error Text: ${errorText}`)
-                console.error(`Category: ${category}`)
-                console.error(`Debug Info:`, chunk.debugInfo)
-                console.error(`CWD: ${this.config.cwd}`)
-                console.error(`SubChatId: ${this.config.subChatId}`)
-                console.error(`Full Chunk:`, chunk)
-                console.error(`===================================\n`)
+                const err = chunk as any
+                console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+                console.error(`║ ⚠️  ERROR CHUNK PROCESSED                                  ║`)
+                console.error(`╠═══════════════════════════════════════════════════════════╣`)
+                console.error(`║ Error Text: ${(err.errorText || 'MISSING').substring(0, 47).padEnd(47)}║`)
+                console.error(`║ Category: ${String(err.debugInfo?.category || 'MISSING').padEnd(50)}║`)
+                console.error(`║ Context: ${String(err.debugInfo?.context || 'MISSING').padEnd(51)}║`)
+                console.error(`║ CWD: ${String(err.debugInfo?.cwd || this.config.cwd).padEnd(54)}║`)
+                console.error(`║ Mode: ${String(err.debugInfo?.mode || 'MISSING').padEnd(52)}║`)
+                console.error(`╚═══════════════════════════════════════════════════════════╝`)
+                console.error(`\nFULL ERROR TEXT:\n"${err.errorText || 'MISSING'}"\n`)
+                console.error(`\nDEBUG INFO:\n${JSON.stringify(err.debugInfo, null, 2)}\n`)
+                console.error(`\nERROR MESSAGE FROM DEBUG:\n${err.debugInfo?.errorMessage || 'MISSING'}\n`)
+                console.error(`\nERROR STACK FROM DEBUG:\n${err.debugInfo?.errorStack || 'MISSING'}\n`)
+                console.error(`\nFULL CHUNK OBJECT:\n${JSON.stringify(chunk, null, 2)}\n`)
                 
                 // Track error in Sentry
                 Sentry.captureException(
