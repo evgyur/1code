@@ -8,6 +8,7 @@ on:
       - 'src/**'
       - 'package.json'
       - 'electron.vite.config.ts'
+      - '.github/workflows/**'
   pull_request:
     branches: [ main ]
 
