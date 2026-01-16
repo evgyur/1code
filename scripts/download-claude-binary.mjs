@@ -240,62 +240,50 @@ async function main() {
   console.log("Claude Code Binary Downloader")
   console.log("=============================\n")
 
-  // Get version
-  let version = specifiedVersion || (await getLatestVersion())
-  console.log(`Version: ${version}`)
-
-  // Fetch manifest and verify platform support
-  let manifest
-  let versionHasPlatform = false
+  // Get version - for Windows, use known working version since 2.1.5 doesn't have Windows binaries
   const currentPlatform = downloadAll ? null : `${process.platform}-${process.arch}`
+  let version = specifiedVersion
   
-  while (!versionHasPlatform) {
-    const manifestUrl = `${DIST_BASE}/${version}/manifest.json`
-    console.log(`Fetching manifest: ${manifestUrl}`)
-
-    try {
-      manifest = await fetchJson(manifestUrl)
-      
-      // Check if current platform is available in this version
-      if (currentPlatform) {
-        const platformDir = PLATFORMS[currentPlatform]?.dir
-        if (platformDir && manifest.platforms && manifest.platforms[platformDir]) {
-          versionHasPlatform = true
-          console.log(`✓ Version ${version} has support for ${currentPlatform}`)
-        } else {
-          console.warn(`✗ Version ${version} does not have support for ${currentPlatform}`)
-          if (manifest.platforms) {
-            console.warn(`  Available platforms: ${Object.keys(manifest.platforms).join(", ")}`)
-          }
-          // Try fallback version
-          if (version !== "2.0.61") {
-            console.log(`Trying fallback version: 2.0.61`)
-            version = "2.0.61"
-            continue
-          } else {
-            console.error(`Fallback version also failed. Cannot download binary.`)
-            process.exit(1)
-          }
-        }
-      } else {
-        // Downloading all platforms, just check manifest exists
-        versionHasPlatform = true
-      }
-    } catch (error) {
-      console.error(`Failed to fetch manifest for version ${version}: ${error.message}`)
-      // Try fallback version
-      if (version !== "2.0.61") {
-        console.log(`Trying fallback version: 2.0.61`)
-        version = "2.0.61"
-        continue
-      } else {
-        console.error(`Fallback version also failed. Cannot download binary.`)
-        process.exit(1)
-      }
+  if (!version) {
+    if (currentPlatform === "win32-x64") {
+      // Windows: use known working version (2.1.5 doesn't have Windows binaries)
+      console.log("Windows detected - using known working version 2.0.61")
+      version = "2.0.61"
+    } else {
+      version = await getLatestVersion()
     }
   }
   
-  console.log(`Using version: ${version}`)
+  console.log(`Version: ${version}`)
+
+  // Fetch manifest
+  const manifestUrl = `${DIST_BASE}/${version}/manifest.json`
+  console.log(`Fetching manifest: ${manifestUrl}`)
+
+  let manifest
+  try {
+    manifest = await fetchJson(manifestUrl)
+    
+    // Verify platform support
+    if (currentPlatform) {
+      const platformDir = PLATFORMS[currentPlatform]?.dir
+      if (!platformDir) {
+        console.error(`Unknown platform: ${currentPlatform}`)
+        process.exit(1)
+      }
+      if (!manifest.platforms || !manifest.platforms[platformDir]) {
+        console.error(`✗ Version ${version} does not have support for ${currentPlatform}`)
+        if (manifest.platforms) {
+          console.error(`  Available platforms: ${Object.keys(manifest.platforms).join(", ")}`)
+        }
+        process.exit(1)
+      }
+      console.log(`✓ Version ${version} has support for ${currentPlatform}`)
+    }
+  } catch (error) {
+    console.error(`Failed to fetch manifest: ${error.message}`)
+    process.exit(1)
+  }
 
   // Determine which platforms to download
   let platformsToDownload
