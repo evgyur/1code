@@ -13,7 +13,7 @@ import {
   logRawClaudeMessage,
   type UIMessageChunk,
 } from "../../claude"
-import { chats, claudeCodeCredentials, getDatabase, subChats } from "../../db"
+import { chats, claudeCodeCredentials, getDatabase, projects, subChats } from "../../db"
 import { publicProcedure, router } from "../index"
 import { buildAgentsOption } from "./agent-utils"
 
@@ -287,10 +287,38 @@ export const claudeRouter = router({
             console.error(`[BACKEND] Original CWD: ${input.cwd}`)
             console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
             console.error(`[BACKEND] Error Details:`, cwdError)
-            emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}`), "Workspace path error")
-            safeEmit({ type: "finish" } as UIMessageChunk)
-            safeComplete()
-            return
+            
+            // Try to get project path from database as fallback
+            try {
+              console.error(`[BACKEND] Attempting fallback: Getting project path from database...`)
+              const db = getDatabase()
+              const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+              if (chat?.projectId) {
+                const project = db.select().from(projects).where(eq(projects.id, chat.projectId)).get()
+                if (project?.path) {
+                  const projectPathExists = await fs.stat(project.path).then(() => true).catch(() => false)
+                  if (projectPathExists) {
+                    console.error(`[BACKEND] ✓ Found project path: ${project.path}`)
+                    resolvedCwd = project.path
+                    input.cwd = project.path
+                    console.error(`[BACKEND] Using project path as fallback (worktree missing)`)
+                  } else {
+                    throw new Error(`Project path exists in DB but is inaccessible: ${project.path}`)
+                  }
+                } else {
+                  throw new Error(`Project not found in database`)
+                }
+              } else {
+                throw new Error(`Chat has no projectId`)
+              }
+            } catch (fallbackError) {
+              const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+              console.error(`[BACKEND] ✗ Fallback failed: ${fallbackMsg}`)
+              emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}\n\nWorktree may have been deleted. Please recreate the workspace.`), "Workspace path error")
+              safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
           }
           
           try {

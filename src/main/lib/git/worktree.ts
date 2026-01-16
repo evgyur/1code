@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import * as os from "node:os";
 import { promisify } from "node:util";
 import simpleGit from "simple-git";
 import {
@@ -905,7 +906,8 @@ export async function createWorktreeForChat(
 		const baseBranch = selectedBaseBranch || await getDefaultBranch(projectPath);
 
 		const branch = generateBranchName();
-		const worktreesDir = join(process.env.HOME || "", ".21st", "worktrees");
+		const homeDir = os.homedir();
+		const worktreesDir = join(homeDir, ".21st", "worktrees");
 		const worktreePath = join(worktreesDir, projectId, chatId);
 
 		await createWorktree(projectPath, branch, worktreePath, `origin/${baseBranch}`);
