@@ -37,7 +37,16 @@ jobs:
         run: bun install
       
       - name: Download Claude binary
-        run: bun run claude:download
+        run: |
+          echo "Downloading Claude binary for Windows..."
+          bun run claude:download
+          if (Test-Path "resources\bin\win32-x64\claude.exe") {
+            echo "✓ Binary downloaded successfully"
+            Get-Item "resources\bin\win32-x64\claude.exe" | Select-Object Name, Length
+          } else {
+            echo "✗ Binary not found after download"
+            exit 1
+          }
       
       - name: Build application
         run: bun run build
