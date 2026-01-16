@@ -241,20 +241,61 @@ async function main() {
   console.log("=============================\n")
 
   // Get version
-  const version = specifiedVersion || (await getLatestVersion())
+  let version = specifiedVersion || (await getLatestVersion())
   console.log(`Version: ${version}`)
 
-  // Fetch manifest
-  const manifestUrl = `${DIST_BASE}/${version}/manifest.json`
-  console.log(`Fetching manifest: ${manifestUrl}`)
-
+  // Fetch manifest and verify platform support
   let manifest
-  try {
-    manifest = await fetchJson(manifestUrl)
-  } catch (error) {
-    console.error(`Failed to fetch manifest: ${error.message}`)
-    process.exit(1)
+  let versionHasPlatform = false
+  const currentPlatform = downloadAll ? null : `${process.platform}-${process.arch}`
+  
+  while (!versionHasPlatform) {
+    const manifestUrl = `${DIST_BASE}/${version}/manifest.json`
+    console.log(`Fetching manifest: ${manifestUrl}`)
+
+    try {
+      manifest = await fetchJson(manifestUrl)
+      
+      // Check if current platform is available in this version
+      if (currentPlatform) {
+        const platformDir = PLATFORMS[currentPlatform]?.dir
+        if (platformDir && manifest.platforms && manifest.platforms[platformDir]) {
+          versionHasPlatform = true
+          console.log(`✓ Version ${version} has support for ${currentPlatform}`)
+        } else {
+          console.warn(`✗ Version ${version} does not have support for ${currentPlatform}`)
+          if (manifest.platforms) {
+            console.warn(`  Available platforms: ${Object.keys(manifest.platforms).join(", ")}`)
+          }
+          // Try fallback version
+          if (version !== "2.0.61") {
+            console.log(`Trying fallback version: 2.0.61`)
+            version = "2.0.61"
+            continue
+          } else {
+            console.error(`Fallback version also failed. Cannot download binary.`)
+            process.exit(1)
+          }
+        }
+      } else {
+        // Downloading all platforms, just check manifest exists
+        versionHasPlatform = true
+      }
+    } catch (error) {
+      console.error(`Failed to fetch manifest for version ${version}: ${error.message}`)
+      // Try fallback version
+      if (version !== "2.0.61") {
+        console.log(`Trying fallback version: 2.0.61`)
+        version = "2.0.61"
+        continue
+      } else {
+        console.error(`Fallback version also failed. Cannot download binary.`)
+        process.exit(1)
+      }
+    }
   }
+  
+  console.log(`Using version: ${version}`)
 
   // Determine which platforms to download
   let platformsToDownload
