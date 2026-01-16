@@ -254,8 +254,9 @@ export const claudeRouter = router({
             if (path.isAbsolute(input.cwd)) {
               resolvedCwd = input.cwd
             } else {
-              // Resolve relative to process.cwd() (app's working directory)
-              resolvedCwd = path.resolve(process.cwd(), input.cwd)
+              // Resolve relative to user's home directory (worktrees are in ~/.21st/worktrees)
+              const homeDir = os.homedir()
+              resolvedCwd = path.resolve(homeDir, input.cwd)
             }
             console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
           } catch (resolveError) {
