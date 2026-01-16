@@ -246,22 +246,47 @@ export const claudeRouter = router({
           
           // Early validation - check cwd exists before doing anything
           console.error(`[BACKEND] Step 1: Validating CWD...`)
+          console.error(`[BACKEND] Original CWD: ${input.cwd}`)
+          
+          // Resolve relative paths to absolute
+          let resolvedCwd: string
           try {
-            const cwdStat = await fs.stat(input.cwd)
+            if (path.isAbsolute(input.cwd)) {
+              resolvedCwd = input.cwd
+            } else {
+              // Resolve relative to process.cwd() (app's working directory)
+              resolvedCwd = path.resolve(process.cwd(), input.cwd)
+            }
+            console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
+          } catch (resolveError) {
+            const errorMsg = resolveError instanceof Error ? resolveError.message : String(resolveError)
+            console.error(`[BACKEND] ✗ CWD RESOLUTION FAILED: ${errorMsg}`)
+            emitError(new Error(`Failed to resolve CWD path: ${input.cwd} - ${errorMsg}`), "Workspace path resolution error")
+            safeEmit({ type: "finish" } as UIMessageChunk)
+            safeComplete()
+            return
+          }
+          
+          try {
+            const cwdStat = await fs.stat(resolvedCwd)
             if (!cwdStat.isDirectory()) {
               console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: Not a directory`)
-              emitError(new Error(`CWD is not a directory: ${input.cwd}`), "Invalid workspace path")
+              emitError(new Error(`CWD is not a directory: ${resolvedCwd}`), "Invalid workspace path")
               safeEmit({ type: "finish" } as UIMessageChunk)
               safeComplete()
               return
             }
-            console.error(`[BACKEND] ✓ CWD VALIDATED: ${input.cwd}`)
+            console.error(`[BACKEND] ✓ CWD VALIDATED: ${resolvedCwd}`)
+            
+            // Update input.cwd to the resolved absolute path for use in query
+            input.cwd = resolvedCwd
           } catch (cwdError) {
             const errorMsg = cwdError instanceof Error ? cwdError.message : String(cwdError)
             console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: ${errorMsg}`)
-            console.error(`[BACKEND] CWD Path: ${input.cwd}`)
+            console.error(`[BACKEND] Original CWD: ${input.cwd}`)
+            console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
             console.error(`[BACKEND] Error Details:`, cwdError)
-            emitError(new Error(`CWD does not exist or is inaccessible: ${input.cwd} - ${errorMsg}`), "Workspace path error")
+            emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}`), "Workspace path error")
             safeEmit({ type: "finish" } as UIMessageChunk)
             safeComplete()
             return
