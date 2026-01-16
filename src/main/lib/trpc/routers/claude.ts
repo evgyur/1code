@@ -580,10 +580,20 @@ export const claudeRouter = router({
             let exitPlanModeToolCallId: string | null = null // Track ExitPlanMode's toolCallId
 
             try {
+              console.log(`[claude] Starting to iterate over stream, subChatId: ${input.subChatId.slice(-8)}`)
+              let streamIterationCount = 0
               for await (const msg of stream) {
-                if (abortController.signal.aborted) break
+                if (abortController.signal.aborted) {
+                  console.log(`[claude] Stream aborted, breaking loop`)
+                  break
+                }
 
                 messageCount++
+                streamIterationCount++
+                
+                if (streamIterationCount === 1) {
+                  console.log(`[claude] Received first message from stream, type: ${(msg as any)?.type}`)
+                }
 
                 // Log raw message for debugging
                 logRawClaudeMessage(input.chatId, msg)
