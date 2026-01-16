@@ -201,22 +201,26 @@ export const claudeRouter = router({
             error instanceof Error ? error.message : String(error)
           const errorStack = error instanceof Error ? error.stack : undefined
 
-          console.error(`[claude] ${context}:`, errorMessage)
-          if (errorStack) console.error("[claude] Stack:", errorStack)
+          console.error(`\n[claude] ✗ ERROR: ${context}`)
+          console.error(`[claude] Message: ${errorMessage}`)
+          if (errorStack) console.error(`[claude] Stack:\n${errorStack}`)
+          console.error(`[claude] CWD: ${input.cwd}`)
+          console.error(`[claude] Mode: ${input.mode}`)
+          console.error(`[claude] SubChatId: ${input.subChatId}\n`)
 
-          // Send detailed error to frontend (safely)
+          // Send detailed error to frontend (safely) - ALWAYS include debug info
           safeEmit({
             type: "error",
             errorText: `${context}: ${errorMessage}`,
-            // Include extra debug info
-            ...(process.env.NODE_ENV !== "production" && {
-              debugInfo: {
-                context,
-                cwd: input.cwd,
-                mode: input.mode,
-                PATH: process.env.PATH?.slice(0, 200),
-              },
-            }),
+            debugInfo: {
+              context,
+              category: "UNKNOWN",
+              cwd: input.cwd,
+              mode: input.mode,
+              subChatId: input.subChatId,
+              errorMessage,
+              ...(errorStack && { errorStack }),
+            },
           } as UIMessageChunk)
         }
 

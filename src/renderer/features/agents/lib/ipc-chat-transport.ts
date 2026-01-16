@@ -240,16 +240,22 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
-                console.error(`[SD] R:ERROR_CHUNK sub=${subId}`)
-                console.error(`[SD] R:ERROR_TEXT sub=${subId}:`, chunk.errorText)
-                console.error(`[SD] R:ERROR_DEBUG sub=${subId}:`, JSON.stringify(chunk.debugInfo, null, 2))
-                console.error(`[SD] R:ERROR_CATEGORY sub=${subId}:`, chunk.debugInfo?.category || "UNKNOWN")
-                console.error(`[SD] R:ERROR_FULL sub=${subId}:`, chunk)
+                const errorText = chunk.errorText || "Unknown error"
+                const category = chunk.debugInfo?.category || "UNKNOWN"
+                
+                // Log error details clearly
+                console.error(`\n========== CLAUDE ERROR ==========`)
+                console.error(`Error Text: ${errorText}`)
+                console.error(`Category: ${category}`)
+                console.error(`Debug Info:`, chunk.debugInfo)
+                console.error(`CWD: ${this.config.cwd}`)
+                console.error(`SubChatId: ${this.config.subChatId}`)
+                console.error(`Full Chunk:`, chunk)
+                console.error(`===================================\n`)
                 
                 // Track error in Sentry
-                const category = chunk.debugInfo?.category || "UNKNOWN"
                 Sentry.captureException(
-                  new Error(chunk.errorText || "Claude transport error"),
+                  new Error(errorText),
                   {
                     tags: {
                       errorCategory: category,
@@ -264,54 +270,40 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   },
                 )
 
-                // Show toast based on error category with full error details
+                // Show toast with full error message
                 const config = ERROR_TOAST_CONFIG[category]
+                const description = config 
+                  ? `${config.description}\n\n${errorText}`
+                  : errorText
 
-                if (config) {
-                  toast.error(config.title, {
-                    description: `${config.description}\n\nError: ${chunk.errorText || "Unknown error"}`,
-                    duration: 12000,
-                    action: config.action
-                      ? {
-                          label: config.action.label,
-                          onClick: config.action.onClick,
-                        }
-                      : {
-                          label: "Copy error",
-                          onClick: () => {
-                            navigator.clipboard.writeText(
-                              `Error: ${chunk.errorText || "Unknown"}\nCategory: ${category}\nDebug: ${JSON.stringify(chunk.debugInfo, null, 2)}`
-                            )
-                          },
-                        },
-                  })
-                } else {
-                  toast.error("Claude error", {
-                    description: chunk.errorText || "An unexpected error occurred",
-                    duration: 12000,
-                    action: {
-                      label: "Copy error",
-                      onClick: () => {
-                        navigator.clipboard.writeText(
-                          `Error: ${chunk.errorText || "Unknown"}\nDebug: ${JSON.stringify(chunk.debugInfo, null, 2)}`
-                        )
-                      },
+                toast.error(config?.title || "Claude Error", {
+                  description: description,
+                  duration: 15000,
+                  action: {
+                    label: "Copy Error",
+                    onClick: () => {
+                      const fullError = `Error: ${errorText}\nCategory: ${category}\nCWD: ${this.config.cwd}\nDebug: ${JSON.stringify(chunk.debugInfo, null, 2)}`
+                      navigator.clipboard.writeText(fullError)
+                      console.log("Error copied to clipboard:", fullError)
                     },
-                  })
-                }
+                  },
+                })
+                
+                // Don't close controller on error - let finish chunk close it
+                // This prevents the "stream already closed" error
               }
 
               // Try to enqueue, but don't crash if stream is already closed
               try {
                 controller.enqueue(chunk)
               } catch (e) {
-                // CRITICAL: Log when enqueue fails - this could explain missing chunks!
-                console.error(`[SD] R:ENQUEUE_ERR sub=${subId} type=${chunk.type} n=${chunkCount} err=${e}`)
-                // If stream is closed, don't try to continue - the error handler already closed it
+                // Stream is already closed - this is expected after an error
                 if (e instanceof TypeError && e.message.includes("closed")) {
-                  console.error(`[SD] R:STREAM_CLOSED sub=${subId} - stream was closed before chunk could be enqueued`)
+                  console.warn(`[SD] R:ENQUEUE_SKIP sub=${subId} type=${chunk.type} - stream already closed (expected after error)`)
                   return
                 }
+                // Other errors should be logged
+                console.error(`[SD] R:ENQUEUE_ERR sub=${subId} type=${chunk.type} n=${chunkCount} err=${e}`)
               }
 
               if (chunk.type === "finish") {
