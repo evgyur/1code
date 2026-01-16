@@ -269,7 +269,12 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 controller.enqueue(chunk)
               } catch (e) {
                 // CRITICAL: Log when enqueue fails - this could explain missing chunks!
-                console.log(`[SD] R:ENQUEUE_ERR sub=${subId} type=${chunk.type} n=${chunkCount} err=${e}`)
+                console.error(`[SD] R:ENQUEUE_ERR sub=${subId} type=${chunk.type} n=${chunkCount} err=${e}`)
+                // If stream is closed, don't try to continue - the error handler already closed it
+                if (e instanceof TypeError && e.message.includes("closed")) {
+                  console.error(`[SD] R:STREAM_CLOSED sub=${subId} - stream was closed before chunk could be enqueued`)
+                  return
+                }
               }
 
               if (chunk.type === "finish") {
@@ -282,7 +287,8 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               }
             },
             onError: (err: Error) => {
-              console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
+              console.error(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
+              console.error(`[SD] R:ERROR_STACK sub=${subId}:`, err.stack)
               // Track transport errors in Sentry
               Sentry.captureException(err, {
                 tags: {
@@ -293,10 +299,23 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   cwd: this.config.cwd,
                   chatId: this.config.chatId,
                   subChatId: this.config.subChatId,
+                  chunkCount,
+                  lastChunkType,
                 },
               })
 
-              controller.error(err)
+              // Show user-friendly error toast
+              toast.error("Connection error", {
+                description: err.message || "Failed to connect to Claude. Check console for details.",
+                duration: 8000,
+              })
+
+              // Only error the controller if it's not already closed
+              try {
+                controller.error(err)
+              } catch (e) {
+                console.error(`[SD] R:ERROR_CONTROLLER_ALREADY_CLOSED sub=${subId}`)
+              }
             },
             onComplete: () => {
               console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)
