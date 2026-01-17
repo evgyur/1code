@@ -87,6 +87,21 @@ export function App() {
     }
     syncOptOutStatus()
 
+    // Sync window frame preference from localStorage to settings file
+    // This ensures the main process knows the preference even if settings file doesn't exist yet
+    const syncFramePreference = async () => {
+      try {
+        const useNativeFrame =
+          localStorage.getItem("preferences:windows-use-native-frame") === "true"
+        if (window.desktopApi?.setWindowFramePreference) {
+          await window.desktopApi.setWindowFramePreference(useNativeFrame)
+        }
+      } catch (error) {
+        console.warn("[App] Failed to sync frame preference:", error)
+      }
+    }
+    syncFramePreference()
+
     // Identify user if already authenticated
     const identifyUser = async () => {
       try {

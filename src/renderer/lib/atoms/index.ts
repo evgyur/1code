@@ -206,6 +206,16 @@ export const ctrlTabTargetAtom = atomWithStorage<CtrlTabTarget>(
   { getOnInit: true },
 )
 
+// Preferences - Windows Window Frame Style
+// When true, uses native frame (white title bar, ALT menu works)
+// When false, uses frameless window (dark custom title bar, no ALT menu)
+export const useNativeFrameAtom = atomWithStorage<boolean>(
+  "preferences:windows-use-native-frame",
+  false, // Default: frameless (dark title bar)
+  undefined,
+  { getOnInit: true },
+)
+
 // Preferences - VS Code Code Themes
 // Selected themes for code syntax highlighting (separate for light/dark UI themes)
 export const vscodeCodeThemeLightAtom = atomWithStorage<string>(

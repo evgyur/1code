@@ -8,19 +8,42 @@ import { Button } from "./ui/button"
 /**
  * Windows title bar component for frameless windows
  * Provides window controls (minimize, maximize, close) and drag region
+ * 
+ * NOTE: This component is only used when frame: false (frameless window).
+ * With native frame, the menu bar works with ALT key, so this component is hidden.
+ * 
+ * IMPORTANT: This component checks the actual window frame state, not the preference.
+ * The preference only applies after restart, so we check the real window state.
  */
 export function WindowsTitleBar() {
   const [isMaximized, setIsMaximized] = useState(false)
+  const [hasNativeFrame, setHasNativeFrame] = useState(false)
 
   // Check if we're on Windows desktop
   const isWindows = typeof window !== "undefined" && window.desktopApi?.platform === "win32"
 
-  // Only render on Windows
-  if (!isWindows) return null
+  // Check actual window frame state (not preference - preference only applies after restart)
+  useEffect(() => {
+    if (!isWindows || !window.desktopApi?.getWindowFrameState) return
+    
+    const checkFrameState = async () => {
+      try {
+        const hasFrame = await window.desktopApi.getWindowFrameState()
+        setHasNativeFrame(hasFrame)
+      } catch (error) {
+        console.warn("[WindowsTitleBar] Failed to check frame state:", error)
+        // Default to showing title bar if we can't check
+        setHasNativeFrame(false)
+      }
+    }
+    
+    checkFrameState()
+  }, [isWindows])
 
   // Check window state on mount and when it changes
+  // NOTE: This must be called before any early returns to follow React hooks rules
   useEffect(() => {
-    if (!window.desktopApi?.windowIsMaximized) return
+    if (!isWindows || !window.desktopApi?.windowIsMaximized) return
 
     const checkMaximized = async () => {
       const maximized = await window.desktopApi.windowIsMaximized()
@@ -37,7 +60,11 @@ export function WindowsTitleBar() {
 
     window.addEventListener("focus", handleFocus)
     return () => window.removeEventListener("focus", handleFocus)
-  }, [])
+  }, [isWindows])
+
+  // Early returns after all hooks are called
+  if (!isWindows) return null
+  if (hasNativeFrame) return null // Native frame has its own title bar
 
   const handleMinimize = async () => {
     await window.desktopApi?.windowMinimize()

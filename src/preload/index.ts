@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld("desktopApi", {
   windowIsFullscreen: () => ipcRenderer.invoke("window:is-fullscreen"),
   setTrafficLightVisibility: (visible: boolean) =>
     ipcRenderer.invoke("window:set-traffic-light-visibility", visible),
+  setWindowFramePreference: (useNativeFrame: boolean) =>
+    ipcRenderer.invoke("window:set-frame-preference", useNativeFrame),
+  getWindowFrameState: () => ipcRenderer.invoke("window:get-frame-state"),
 
   // Window events
   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
@@ -222,6 +225,7 @@ export interface DesktopApi {
   onShortcutNewAgent: (callback: () => void) => () => void
   // File changes
   onFileChanged: (callback: (data: { filePath: string; type: string; subChatId: string }) => void) => () => void
+  // Main process logs
 }
 
 declare global {

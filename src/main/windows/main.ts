@@ -6,8 +6,10 @@ import {
   app,
   clipboard,
   session,
+  Menu,
 } from "electron"
 import { join } from "path"
+import { readFileSync, existsSync } from "fs"
 import { createIPCHandler } from "trpc-electron/main"
 import { createAppRouter } from "../lib/trpc/routers"
 import { getAuthManager, handleAuthCode, getBaseUrl } from "../index"
@@ -21,6 +23,42 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
 
   // App info
   ipcMain.handle("app:version", () => app.getVersion())
+  
+  // Window frame preference
+  ipcMain.handle("window:set-frame-preference", (_event, useNativeFrame: boolean) => {
+    try {
+      const { writeFileSync, mkdirSync } = require("fs")
+      const settingsPath = join(app.getPath("userData"), "window-settings.json")
+      const settingsDir = app.getPath("userData")
+      // Ensure directory exists
+      mkdirSync(settingsDir, { recursive: true })
+      // Write preference
+      writeFileSync(settingsPath, JSON.stringify({ useNativeFrame }, null, 2))
+      console.log("[Main] Window frame preference saved:", useNativeFrame)
+      return true
+    } catch (error) {
+      console.error("[Main] Failed to save frame preference:", error)
+      return false
+    }
+  })
+  
+  // Get current window frame state (for renderer to check)
+  // This reads the actual preference that was used when the window was created
+  ipcMain.handle("window:get-frame-state", () => {
+    if (process.platform !== "win32") return false
+    // Read from settings file to see what frame type was used at window creation
+    try {
+      const settingsPath = join(app.getPath("userData"), "window-settings.json")
+      if (existsSync(settingsPath)) {
+        const settings = JSON.parse(readFileSync(settingsPath, "utf-8"))
+        return settings.useNativeFrame === true
+      }
+      return false // Default: frameless
+    } catch (error) {
+      console.warn("[Main] Failed to read frame state:", error)
+      return false // Default: frameless
+    }
+  })
   // Note: Update checking is now handled by auto-updater module (lib/auto-updater.ts)
   ipcMain.handle("app:set-badge", (_event, count: number | null) => {
     if (process.platform === "darwin") {
@@ -226,11 +264,46 @@ export function getWindow(): BrowserWindow | null {
 }
 
 /**
+ * Read window frame preference from settings file
+ * Returns true if native frame should be used, false for frameless
+ */
+function getUseNativeFramePreference(): boolean {
+  if (process.platform !== "win32") return false
+  
+  try {
+    // Read preference from a simple JSON file in userData
+    const settingsPath = join(app.getPath("userData"), "window-settings.json")
+    console.log("[Main] Checking frame preference at:", settingsPath)
+    
+    if (existsSync(settingsPath)) {
+      const fileContent = readFileSync(settingsPath, "utf-8")
+      console.log("[Main] Settings file content:", fileContent)
+      const settings = JSON.parse(fileContent)
+      const useNative = settings.useNativeFrame === true
+      console.log("[Main] Frame preference from file:", useNative, "parsed settings:", settings)
+      return useNative
+    }
+    
+    // Default: frameless (dark title bar)
+    // Note: If user has set preference in UI but file doesn't exist yet,
+    // it will be synced on next app launch after renderer loads
+    console.log("[Main] No settings file found, using default: frameless")
+    return false
+  } catch (error) {
+    console.error("[Main] Failed to read frame preference:", error)
+    return false // Default: frameless
+  }
+}
+
+/**
  * Create the main application window
  */
 export function createMainWindow(): BrowserWindow {
   // Register IPC handlers before creating window
   registerIpcHandlers(getWindow)
+
+  // Read frame preference from settings file
+  const useNativeFrame = getUseNativeFramePreference()
 
   const window = new BrowserWindow({
     width: 1400,
@@ -246,10 +319,11 @@ export function createMainWindow(): BrowserWindow {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     trafficLightPosition:
       process.platform === "darwin" ? { x: 15, y: 12 } : undefined,
-    // Windows: Use frameless window to hide native title bar completely
+    // Windows: Use native frame or frameless based on user preference
+    // Preference is stored in localStorage and applied on next app launch
     ...(process.platform === "win32" && {
-      frame: false, // Remove native title bar
-      autoHideMenuBar: true, // Hide menu bar (user can press Alt to show)
+      frame: useNativeFrame ? true : false, // Use native frame if preference is true
+      autoHideMenuBar: useNativeFrame ? true : false, // Show menu bar with ALT if native frame
     }),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
@@ -394,6 +468,17 @@ export function createMainWindow(): BrowserWindow {
       console.error("[Main] Page failed to load:", errorCode, errorDescription)
     },
   )
+
+  // Windows: Configure menu bar based on frame type
+  if (process.platform === "win32") {
+    if (useNativeFrame) {
+      // Native frame: menu bar accessible with ALT key
+      window.setAutoHideMenuBar(true)
+    } else {
+      // Frameless: menu bar won't work with ALT, but shortcuts still work
+      window.setAutoHideMenuBar(true)
+    }
+  }
 
   return window
 }

@@ -5,6 +5,7 @@ import {
   soundNotificationsEnabledAtom,
   analyticsOptOutAtom,
   ctrlTabTargetAtom,
+  useNativeFrameAtom,
   type CtrlTabTarget,
 } from "../../../lib/atoms"
 import { Switch } from "../../ui/switch"
@@ -40,7 +41,11 @@ export function AgentsPreferencesTab() {
   const [soundEnabled, setSoundEnabled] = useAtom(soundNotificationsEnabledAtom)
   const [analyticsOptOut, setAnalyticsOptOut] = useAtom(analyticsOptOutAtom)
   const [ctrlTabTarget, setCtrlTabTarget] = useAtom(ctrlTabTargetAtom)
+  const [useNativeFrame, setUseNativeFrame] = useAtom(useNativeFrameAtom)
   const isNarrowScreen = useIsNarrowScreen()
+  
+  // Check if we're on Windows
+  const isWindows = typeof window !== "undefined" && window.desktopApi?.platform === "win32"
 
   // Sync opt-out status to main process
   const handleAnalyticsToggle = async (optedOut: boolean) => {
@@ -50,6 +55,24 @@ export function AgentsPreferencesTab() {
       await window.desktopApi?.setAnalyticsOptOut(optedOut)
     } catch (error) {
       console.error("Failed to sync analytics opt-out to main process:", error)
+    }
+  }
+
+  // Handle window frame toggle
+  const handleFrameToggle = (enabled: boolean) => {
+    try {
+      // Update atom first (synchronous, updates localStorage)
+      setUseNativeFrame(enabled)
+      
+      // Save preference to main process (non-blocking, fire and forget)
+      // Don't await - just fire and forget to avoid blocking
+      if (window.desktopApi?.setWindowFramePreference) {
+        window.desktopApi.setWindowFramePreference(enabled).catch((error) => {
+          console.error("Failed to save frame preference:", error)
+        })
+      }
+    } catch (error) {
+      console.error("Error in handleFrameToggle:", error)
     }
   }
 
@@ -129,6 +152,41 @@ export function AgentsPreferencesTab() {
           </Select>
         </div>
       </div>
+
+      {/* Windows Window Frame Section - Only show on Windows */}
+      {isWindows && (
+        <div className="bg-background rounded-lg border border-border overflow-hidden">
+          <div className="p-4 space-y-4">
+            {/* Warning Banner */}
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-3">
+              <div className="flex items-start gap-2">
+                <span className="text-amber-500 text-sm font-medium">⚠️ Restart Required</span>
+              </div>
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                Changing this setting requires restarting the app to take effect.
+              </p>
+            </div>
+            
+            {/* Native Frame Toggle */}
+            <div className="flex items-start justify-between">
+              <div className="flex flex-col space-y-1">
+                <span className="text-sm font-medium text-foreground">
+                  Native Window Frame
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {useNativeFrame
+                    ? "Uses native Windows title bar. Menu bar accessible with ALT key."
+                    : "Uses custom dark title bar. Menu shortcuts still work (Ctrl+N, etc.)."}
+                </span>
+              </div>
+              <Switch
+                checked={useNativeFrame}
+                onCheckedChange={handleFrameToggle}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Privacy Section */}
       <div className="space-y-2">
