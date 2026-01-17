@@ -74,7 +74,6 @@ contextBridge.exposeInMainWorld("desktopApi", {
   windowIsFullscreen: () => ipcRenderer.invoke("window:is-fullscreen"),
   setTrafficLightVisibility: (visible: boolean) =>
     ipcRenderer.invoke("window:set-traffic-light-visibility", visible),
-  setWindowTheme: (isDark: boolean) => ipcRenderer.invoke("window:set-theme", isDark),
 
   // Window events
   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
@@ -184,7 +183,6 @@ export interface DesktopApi {
   windowToggleFullscreen: () => Promise<void>
   windowIsFullscreen: () => Promise<boolean>
   setTrafficLightVisibility: (visible: boolean) => Promise<void>
-  setWindowTheme: (isDark: boolean) => Promise<void>
   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => () => void
   onFocusChange: (callback: (isFocused: boolean) => void) => () => void
   zoomIn: () => Promise<void>

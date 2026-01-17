@@ -55,6 +55,14 @@ export const createBranchesRouter = () => {
 				},
 			),
 
+		getCurrentBranch: publicProcedure
+			.input(z.object({ worktreePath: z.string() }))
+			.query(async ({ input }): Promise<string | null> => {
+				assertRegisteredWorktree(input.worktreePath);
+				const { getCurrentBranch } = await import("./worktree");
+				return getCurrentBranch(input.worktreePath);
+			}),
+
 		switchBranch: publicProcedure
 			.input(
 				z.object({

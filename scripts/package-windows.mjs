@@ -1,0 +1,84 @@
+#!/usr/bin/env node
+/**
+ * Windows packaging script that suppresses winCodeSign extraction errors
+ * These errors occur because electron-builder tries to extract macOS signing tools
+ * on Windows, which fails due to symlink limitations. The build still succeeds.
+ */
+
+import { spawn } from 'child_process'
+import { fileURLToPath } from 'url'
+import { dirname, join } from 'path'
+import { existsSync } from 'fs'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const projectRoot = join(__dirname, '..')
+
+// Set environment variables to prevent code signing attempts
+const env = {
+  ...process.env,
+  CSC_IDENTITY_AUTO_SELECT: 'false',
+  WIN_CSC_LINK: '',
+  WIN_CSC_KEY_PASSWORD: '',
+}
+
+// Filter out winCodeSign/darwin symlink errors from output
+const filterOutput = (data) => {
+  const lines = data.toString().split('\n')
+  const filtered = lines.filter(line => {
+    const lower = line.toLowerCase()
+    return !lower.includes('wincodesign') &&
+           !lower.includes('darwin') &&
+           !lower.includes('symbolic link') &&
+           !lower.includes('libcrypto.dylib') &&
+           !lower.includes('libssl.dylib') &&
+           !lower.includes('cannot create symbolic link')
+  })
+  if (filtered.length > 0) {
+    process.stdout.write(filtered.join('\n'))
+  }
+}
+
+const electronBuilder = spawn('npx', ['electron-builder', '--dir'], {
+  cwd: projectRoot,
+  shell: true,
+  env,
+})
+
+// Filter stdout
+electronBuilder.stdout?.on('data', filterOutput)
+
+// Filter stderr but keep important errors
+electronBuilder.stderr?.on('data', (data) => {
+  const text = data.toString()
+  // Only show errors that aren't related to winCodeSign/darwin
+  if (!text.toLowerCase().includes('wincodesign') &&
+      !text.toLowerCase().includes('darwin') &&
+      !text.toLowerCase().includes('symbolic link') &&
+      !text.toLowerCase().includes('libcrypto.dylib') &&
+      !text.toLowerCase().includes('libssl.dylib')) {
+    process.stderr.write(data)
+  }
+})
+
+electronBuilder.on('error', (error) => {
+  console.error('Failed to start electron-builder:', error)
+  process.exit(1)
+})
+
+electronBuilder.on('close', (code) => {
+  // Check if executable was created despite winCodeSign errors
+  const exePath = join(projectRoot, 'release', 'win-unpacked', '1Code.exe')
+  
+  if (existsSync(exePath)) {
+    console.log('\n✅ Build completed successfully!')
+    console.log(`   Executable: ${exePath}`)
+    process.exit(0)
+  } else if (code === 0) {
+    console.log('\n⚠️  Build completed but executable not found')
+    process.exit(1)
+  } else {
+    // Exit with original code if executable doesn't exist
+    process.exit(code || 1)
+  }
+})

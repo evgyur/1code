@@ -266,8 +266,21 @@ export function createMainWindow(): BrowserWindow {
 
   // Setup tRPC IPC handler (singleton pattern)
   if (ipcHandler) {
-    // Reuse existing handler, just attach new window
-    ipcHandler.attachWindow(window)
+    // Check if window is already attached to avoid duplicates
+    // In dev mode with hot reload, the same window might be attached multiple times
+    try {
+      ipcHandler.attachWindow(window)
+    } catch (error) {
+      // If attach fails (e.g., window already attached), recreate handler
+      console.warn("[Main] Failed to attach window to existing handler, recreating:", error)
+      ipcHandler = createIPCHandler({
+        router: createAppRouter(getWindow),
+        windows: [window],
+        createContext: async () => ({
+          getWindow,
+        }),
+      })
+    }
   } else {
     // Create new handler with context
     ipcHandler = createIPCHandler({
@@ -320,9 +333,18 @@ export function createMainWindow(): BrowserWindow {
     return { action: "deny" }
   })
 
+  // Handle window navigation (reloads) - clean up subscriptions before page reloads
+  window.webContents.on("will-navigate", () => {
+    // In dev mode, hot reload can cause duplicate subscriptions
+    // The renderer should clean up subscriptions, but we log for debugging
+    console.log("[Main] Window navigating, subscriptions should be cleaned up by renderer")
+  })
+
   // Handle window close
   window.on("closed", () => {
     currentWindow = null
+    // Note: tRPC handler persists as singleton, but window reference is cleared
+    // Subscriptions should be cleaned up by renderer before window closes
   })
 
   // Load the renderer - check auth first

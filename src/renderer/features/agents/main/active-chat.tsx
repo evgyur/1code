@@ -54,6 +54,7 @@ import {
   ChevronDown,
   Columns2,
   Eye,
+  GitBranch,
   GitCommitHorizontal,
   GitMerge,
   ListTree,
@@ -817,6 +818,7 @@ function ChatViewInner({
   isSubChatsSidebarOpen = false,
   sandboxId,
   projectPath,
+  storedBranch,
   isArchived = false,
   onRestoreWorkspace,
 }: {
@@ -836,6 +838,7 @@ function ChatViewInner({
   isSubChatsSidebarOpen?: boolean
   sandboxId?: string
   projectPath?: string
+  storedBranch?: string
   isArchived?: boolean
   onRestoreWorkspace?: () => void
 }) {
@@ -2364,14 +2367,25 @@ function ChatViewInner({
             isSubChatsSidebarOpen ? "pt-[52px]" : "pt-2",
           )}
         >
-          <ChatTitleEditor
-            name={subChatName}
-            placeholder="New Chat"
-            onSave={handleRenameSubChat}
-            isMobile={false}
-            chatId={subChatId}
-            hasMessages={messages.length > 0}
-          />
+          <div className="px-2 max-w-2xl mx-auto flex items-center justify-between w-full">
+            <div className="flex-1 min-w-0">
+              <ChatTitleEditor
+                name={subChatName}
+                placeholder="New Chat"
+                onSave={handleRenameSubChat}
+                isMobile={false}
+                chatId={subChatId}
+                hasMessages={messages.length > 0}
+              />
+            </div>
+            {/* Current branch display - show branch from chat or query from git, aligned to right */}
+            {projectPath && (
+              <BranchDisplay 
+                worktreePath={projectPath} 
+                storedBranch={storedBranch}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -5010,6 +5024,7 @@ export function ChatView({
               isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
               sandboxId={sandboxId || undefined}
               projectPath={worktreePath || undefined}
+              storedBranch={(agentChat as any)?.branch as string | undefined}
               isArchived={isArchived}
               onRestoreWorkspace={handleRestoreWorkspace}
             />
@@ -5492,6 +5507,71 @@ export function ChatView({
           />
         )}
       </div>
+    </div>
+  )
+}
+
+// Branch display component - shows current git branch in chat
+function BranchDisplay({ 
+  worktreePath, 
+  storedBranch 
+}: { 
+  worktreePath: string
+  storedBranch?: string 
+}) {
+  const { data: currentBranch, isLoading, error } = trpc.changes.getCurrentBranch.useQuery(
+    { worktreePath },
+    {
+      enabled: !!worktreePath,
+      refetchInterval: 5000, // Refetch every 5 seconds to catch branch changes
+      retry: 1, // Only retry once on error
+    }
+  )
+
+  // Use live branch from git query, fallback to stored branch from database
+  const displayBranch = currentBranch || storedBranch
+
+  // Debug logging to help troubleshoot
+  useEffect(() => {
+    if (worktreePath) {
+      console.log("[BranchDisplay] State:", {
+        worktreePath,
+        storedBranch,
+        currentBranch,
+        displayBranch,
+        isLoading,
+        error: error?.message,
+      })
+    }
+  }, [worktreePath, storedBranch, currentBranch, displayBranch, isLoading, error])
+
+  // Show loading state only if we don't have a stored branch
+  if (isLoading && !storedBranch) {
+    return (
+      <div className="flex items-center gap-1.5 mt-1.5 px-1 opacity-50">
+        <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0 animate-pulse" />
+        <span className="text-xs text-muted-foreground font-mono">loading...</span>
+      </div>
+    )
+  }
+
+  // Show error state (but still show stored branch if available)
+  if (error && !storedBranch) {
+    console.warn("[BranchDisplay] Error:", error.message, "Path:", worktreePath)
+    return null
+  }
+
+  // Don't show if no branch at all
+  if (!displayBranch) {
+    return null
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1.5 px-1 opacity-80 hover:opacity-100 transition-opacity">
+      <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <span className="text-xs text-muted-foreground font-mono select-all">
+        {displayBranch}
+      </span>
     </div>
   )
 }
