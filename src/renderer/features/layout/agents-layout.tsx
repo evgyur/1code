@@ -24,6 +24,7 @@ import { ResizableSidebar } from "../../components/ui/resizable-sidebar"
 import { AgentsSidebar } from "../sidebar/agents-sidebar"
 import { AgentsContent } from "../agents/ui/agents-content"
 import { UpdateBanner } from "../../components/update-banner"
+import { WindowsTitleBar } from "../../components/windows-title-bar"
 import { useUpdateChecker } from "../../lib/hooks/use-update-checker"
 import { useAgentSubChatStore } from "../../lib/stores/sub-chat-store"
 
@@ -223,8 +224,11 @@ export function AgentsLayout() {
         onClose={() => setShortcutsOpen(false)}
       />
       <ClaudeLoginModal />
-      <div className="flex w-full h-full relative overflow-hidden bg-background select-none">
-        {/* Left Sidebar (Agents) */}
+      <div className="flex flex-col w-full h-full relative overflow-hidden bg-background select-none">
+        {/* Windows Title Bar (only on Windows) */}
+        <WindowsTitleBar />
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left Sidebar (Agents) */}
         <ResizableSidebar
           isOpen={!isMobile && sidebarOpen}
           onClose={handleCloseSidebar}
@@ -247,9 +251,10 @@ export function AgentsLayout() {
           />
         </ResizableSidebar>
 
-        {/* Main Content */}
-        <div className="flex-1 overflow-hidden flex flex-col min-w-0">
-          <AgentsContent />
+          {/* Main Content */}
+          <div className="flex-1 overflow-hidden flex flex-col min-w-0">
+            <AgentsContent />
+          </div>
         </div>
 
         {/* Update Banner */}

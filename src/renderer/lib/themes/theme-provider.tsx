@@ -208,6 +208,8 @@ export function VSCodeThemeProvider({ children }: VSCodeThemeProviderProps) {
       removeCSSVariables()
     }
   }, [fullThemeData, selectedThemeId, setNextTheme])
+
+  // Windows: Using frameless window with custom title bar, no theme sync needed
   
   // Get terminal theme
   const terminalTheme = useMemo((): ITheme => {

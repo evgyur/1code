@@ -63,6 +63,7 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
     "window:is-fullscreen",
     () => getWindow()?.isFullScreen() ?? false,
   )
+  // Window theme handler removed - using frameless window on Windows with custom title bar
 
   // Traffic light visibility control (for hybrid native/custom approach)
   ipcMain.handle(
@@ -245,6 +246,11 @@ export function createMainWindow(): BrowserWindow {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     trafficLightPosition:
       process.platform === "darwin" ? { x: 15, y: 12 } : undefined,
+    // Windows: Use frameless window to hide native title bar completely
+    ...(process.platform === "win32" && {
+      frame: false, // Remove native title bar
+      autoHideMenuBar: true, // Hide menu bar (user can press Alt to show)
+    }),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       nodeIntegration: false,
@@ -280,6 +286,7 @@ export function createMainWindow(): BrowserWindow {
     if (process.platform === "darwin") {
       window.setWindowButtonVisibility(true)
     }
+    // Windows: frameless window, no title bar overlay needed
     window.show()
   })
 
@@ -355,7 +362,10 @@ export function createMainWindow(): BrowserWindow {
     if (process.platform === "darwin") {
       window.setWindowButtonVisibility(true)
     }
+    // Windows: frameless window, custom title bar in renderer
   })
+
+  // Windows: frameless window, custom title bar in renderer handles theme
   window.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription) => {

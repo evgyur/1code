@@ -122,7 +122,7 @@
   "build": {
     "appId": "dev.21st.agents",
     "productName": "1Code",
-    "npmRebuild": true,
+    "npmRebuild": false,
     "win": {
       "target": [
         "portable"
@@ -212,14 +212,6 @@
         }
       ],
       "iconSize": 80
-    },
-    "win": {
-      "target": [
-        "portable"
-      ],
-      "icon": "build/icon.ico",
-      "sign": null,
-      "executableName": "1Code"
     },
     "linux": {
       "target": [
