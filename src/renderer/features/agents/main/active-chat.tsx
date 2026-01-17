@@ -818,6 +818,7 @@ function ChatViewInner({
   isSubChatsSidebarOpen = false,
   sandboxId,
   projectPath,
+  originalProjectPath,
   storedBranch,
   isArchived = false,
   onRestoreWorkspace,
@@ -838,6 +839,7 @@ function ChatViewInner({
   isSubChatsSidebarOpen?: boolean
   sandboxId?: string
   projectPath?: string
+  originalProjectPath?: string
   storedBranch?: string
   isArchived?: boolean
   onRestoreWorkspace?: () => void
@@ -2378,7 +2380,7 @@ function ChatViewInner({
                 hasMessages={messages.length > 0}
               />
             </div>
-            {/* Current branch display - show branch from chat or query from git, aligned to right */}
+            {/* Current branch display - show branch from worktree (what user is actually working on) */}
             {projectPath && (
               <BranchDisplay 
                 worktreePath={projectPath} 
@@ -3438,6 +3440,8 @@ function ChatViewInner({
                     {/* Context window indicator - click to compact */}
                     <AgentContextIndicator
                       messages={messages}
+                      chat={chat}
+                      subChatId={subChatId}
                       onCompact={handleCompact}
                       isCompacting={isCompacting}
                       disabled={isStreaming}
@@ -5024,6 +5028,7 @@ export function ChatView({
               isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
               sandboxId={sandboxId || undefined}
               projectPath={worktreePath || undefined}
+              originalProjectPath={originalProjectPath}
               storedBranch={(agentChat as any)?.branch as string | undefined}
               isArchived={isArchived}
               onRestoreWorkspace={handleRestoreWorkspace}
@@ -5514,15 +5519,18 @@ export function ChatView({
 // Branch display component - shows current git branch in chat
 function BranchDisplay({ 
   worktreePath, 
-  storedBranch 
+  storedBranch
 }: { 
   worktreePath: string
-  storedBranch?: string 
+  storedBranch?: string
 }) {
+  // Query branch from worktree (what user is actually working on)
+  const hasValidPath = !!worktreePath && typeof worktreePath === "string" && worktreePath.trim().length > 0
+  
   const { data: currentBranch, isLoading, error } = trpc.changes.getCurrentBranch.useQuery(
-    { worktreePath },
+    { worktreePath: worktreePath || "" },
     {
-      enabled: !!worktreePath,
+      enabled: hasValidPath,
       refetchInterval: 5000, // Refetch every 5 seconds to catch branch changes
       retry: 1, // Only retry once on error
     }

@@ -22,11 +22,30 @@ const env = {
   WIN_CSC_KEY_PASSWORD: '',
 }
 
+// Track if we detect file lock errors
+let hasFileLockError = false
+
 // Filter out winCodeSign/darwin symlink errors from output
 const filterOutput = (data) => {
   const lines = data.toString().split('\n')
   const filtered = lines.filter(line => {
     const lower = line.toLowerCase()
+    
+    // Detect file lock/overwrite errors in stdout too
+    if (lower.includes('ebusy') || 
+        lower.includes('eacces') || 
+        lower.includes('eperm') ||
+        lower.includes('file is in use') ||
+        lower.includes('cannot overwrite') ||
+        lower.includes('access is denied') ||
+        lower.includes('the process cannot access the file') ||
+        lower.includes('being used by another process') ||
+        lower.includes('file is locked') ||
+        lower.includes('cannot delete') ||
+        lower.includes('sharing violation')) {
+      hasFileLockError = true
+    }
+    
     return !lower.includes('wincodesign') &&
            !lower.includes('darwin') &&
            !lower.includes('symbolic link') &&
@@ -51,12 +70,29 @@ electronBuilder.stdout?.on('data', filterOutput)
 // Filter stderr but keep important errors
 electronBuilder.stderr?.on('data', (data) => {
   const text = data.toString()
+  const lower = text.toLowerCase()
+  
+  // Detect file lock/overwrite errors in stderr too
+  if (lower.includes('ebusy') || 
+      lower.includes('eacces') || 
+      lower.includes('eperm') ||
+      lower.includes('file is in use') ||
+      lower.includes('cannot overwrite') ||
+      lower.includes('access is denied') ||
+      lower.includes('the process cannot access the file') ||
+      lower.includes('being used by another process') ||
+      lower.includes('file is locked') ||
+      lower.includes('cannot delete') ||
+      lower.includes('sharing violation')) {
+    hasFileLockError = true
+  }
+  
   // Only show errors that aren't related to winCodeSign/darwin
-  if (!text.toLowerCase().includes('wincodesign') &&
-      !text.toLowerCase().includes('darwin') &&
-      !text.toLowerCase().includes('symbolic link') &&
-      !text.toLowerCase().includes('libcrypto.dylib') &&
-      !text.toLowerCase().includes('libssl.dylib')) {
+  if (!lower.includes('wincodesign') &&
+      !lower.includes('darwin') &&
+      !lower.includes('symbolic link') &&
+      !lower.includes('libcrypto.dylib') &&
+      !lower.includes('libssl.dylib')) {
     process.stderr.write(data)
   }
 })
@@ -70,7 +106,11 @@ electronBuilder.on('close', (code) => {
   // Check if executable was created despite winCodeSign errors
   const exePath = join(projectRoot, 'release', 'win-unpacked', '1Code.exe')
   
-  if (existsSync(exePath)) {
+  if (hasFileLockError) {
+    console.log('\n❌ Build failed: Cannot overwrite files (app may be running)')
+    console.log('   Please close 1Code.exe and try again')
+    process.exit(1)
+  } else if (existsSync(exePath)) {
     console.log('\n✅ Build completed successfully!')
     console.log(`   Executable: ${exePath}`)
     process.exit(0)

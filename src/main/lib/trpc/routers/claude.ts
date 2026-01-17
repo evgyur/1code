@@ -194,9 +194,13 @@ export const claudeRouter = router({
         // Track if observable is still active (not unsubscribed)
         let isObservableActive = true
 
-        // Helper to safely emit (no-op if already unsubscribed)
+        // Helper to safely emit (no-op if already unsubscribed or aborted)
         const safeEmit = (chunk: UIMessageChunk) => {
           if (!isObservableActive) return false
+          if (abortController.signal.aborted) {
+            console.log(`[SD] M:ABORT_BLOCK_EMIT sub=${subId} type=${chunk.type}`)
+            return false
+          }
           try {
             emit.next(chunk)
             return true
@@ -799,8 +803,9 @@ export const claudeRouter = router({
               let lastMessageType: string | null = null
               
               for await (const msg of stream) {
+                // Check abort signal immediately - don't process if aborted
                 if (abortController.signal.aborted) {
-                  console.error(`[BACKEND] Stream aborted at iteration ${streamIterationCount}`)
+                  console.log(`[SD] M:ABORT_STREAM_LOOP sub=${subId} iteration=${streamIterationCount}`)
                   break
                 }
 
@@ -905,8 +910,20 @@ export const claudeRouter = router({
                   }, null, 2))
                 }
 
+                // Check abort before processing chunks
+                if (abortController.signal.aborted) {
+                  console.log(`[SD] M:ABORT_BEFORE_CHUNKS sub=${subId} n=${chunkCount}`)
+                  break
+                }
+
                 // Transform and emit + accumulate
                 for (const chunk of transform(msg)) {
+                  // Check abort signal frequently during chunk processing
+                  if (abortController.signal.aborted) {
+                    console.log(`[SD] M:ABORT_DURING_CHUNKS sub=${subId} type=${chunk.type} n=${chunkCount}`)
+                    break
+                  }
+                  
                   chunkCount++
                   lastChunkType = chunk.type
 
@@ -1009,6 +1026,12 @@ export const claudeRouter = router({
                     console.log(`[SD] M:PLAN_BREAK_CHUNK sub=${subId}`)
                     break
                   }
+                  
+                  // Break from chunk loop if aborted
+                  if (abortController.signal.aborted) {
+                    console.log(`[SD] M:ABORT_IN_CHUNK_LOOP sub=${subId}`)
+                    break
+                  }
                 }
                 // Break from stream loop if plan is done
                 if (planCompleted) {
@@ -1018,6 +1041,11 @@ export const claudeRouter = router({
                 // Break from stream loop if observer closed (user clicked Stop)
                 if (!isObservableActive) {
                   console.log(`[SD] M:OBSERVER_CLOSED_STREAM sub=${subId}`)
+                  break
+                }
+                // Break from stream loop if aborted (double-check)
+                if (abortController.signal.aborted) {
+                  console.log(`[SD] M:ABORT_AFTER_CHUNKS sub=${subId}`)
                   break
                 }
               }

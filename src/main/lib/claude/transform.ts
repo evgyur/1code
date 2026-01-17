@@ -386,13 +386,55 @@ export function createTransformer() {
       yield* endTextBlock()
       yield* endToolInput()
 
-      const inputTokens = msg.usage?.input_tokens
-      const outputTokens = msg.usage?.output_tokens
+      // Extract token usage - check multiple possible locations and field names
+      const usage = msg.usage || (msg as any).usage_info
+      const modelUsage = (msg as any).modelUsage
+      
+      // modelUsage is an object where keys are model names and values contain inputTokens/outputTokens
+      // We need to sum up tokens across all models
+      let inputTokens: number | undefined = undefined
+      let outputTokens: number | undefined = undefined
+      
+      if (modelUsage && typeof modelUsage === 'object') {
+        // Sum tokens from all models in modelUsage
+        let totalInputTokens = 0
+        let totalOutputTokens = 0
+        for (const modelName in modelUsage) {
+          const modelData = modelUsage[modelName]
+          if (modelData && typeof modelData === 'object') {
+            totalInputTokens += modelData.inputTokens ?? modelData.input_tokens ?? 0
+            totalOutputTokens += modelData.outputTokens ?? modelData.output_tokens ?? 0
+          }
+        }
+        if (totalInputTokens > 0 || totalOutputTokens > 0) {
+          inputTokens = totalInputTokens
+          outputTokens = totalOutputTokens
+        }
+      }
+      
+      // Fallback to usage object if modelUsage didn't provide tokens
+      if (inputTokens === undefined) {
+        inputTokens = 
+          usage?.input_tokens ?? 
+          usage?.inputTokens ?? 
+          (msg as any).input_tokens ?? 
+          (msg as any).inputTokens ?? 
+          undefined
+      }
+      if (outputTokens === undefined) {
+        outputTokens = 
+          usage?.output_tokens ?? 
+          usage?.outputTokens ?? 
+          (msg as any).output_tokens ?? 
+          (msg as any).outputTokens ?? 
+          undefined
+      }
+      
       const metadata: MessageMetadata = {
         sessionId: msg.session_id,
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens && outputTokens ? inputTokens + outputTokens : undefined,
+        inputTokens: inputTokens ?? 0,
+        outputTokens: outputTokens ?? 0,
+        totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) > 0 ? (inputTokens ?? 0) + (outputTokens ?? 0) : undefined,
         totalCostUsd: msg.total_cost_usd,
         durationMs: startTime ? Date.now() - startTime : undefined,
         resultSubtype: msg.subtype || "success",

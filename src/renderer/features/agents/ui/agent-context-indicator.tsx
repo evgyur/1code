@@ -20,6 +20,8 @@ type ModelId = keyof typeof CONTEXT_WINDOWS
 
 interface AgentContextIndicatorProps {
   messages: Array<{ metadata?: AgentMessageMetadata }>
+  chat?: any // Chat instance to access original messages with metadata
+  subChatId?: string // Sub-chat ID to look up original messages from database
   modelId?: ModelId
   className?: string
   onCompact?: () => void
@@ -88,6 +90,8 @@ function CircularProgress({
 
 export const AgentContextIndicator = memo(function AgentContextIndicator({
   messages,
+  chat,
+  subChatId,
   modelId = "sonnet",
   className,
   onCompact,
@@ -95,20 +99,119 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
   disabled,
 }: AgentContextIndicatorProps) {
   // Calculate session totals from all message metadata
+  // Only assistant messages have metadata (token usage from AI responses)
   const sessionTotals = useMemo(() => {
     let totalInputTokens = 0
     let totalOutputTokens = 0
     let totalCostUsd = 0
 
-    for (const msg of messages) {
-      if (msg.metadata) {
-        totalInputTokens += msg.metadata.inputTokens || 0
-        totalOutputTokens += msg.metadata.outputTokens || 0
-        totalCostUsd += msg.metadata.totalCostUsd || 0
+    // Try to get original messages from Chat instance if available (they might have metadata)
+    // The AI SDK's useChat might strip metadata, so we check the Chat instance directly
+    let messagesToCheck = messages
+    if (chat) {
+      // Try different ways to access messages from Chat instance
+      if (typeof chat.getMessages === 'function') {
+        try {
+          const originalMessages = chat.getMessages()
+          if (originalMessages && originalMessages.length > 0) {
+            messagesToCheck = originalMessages
+          }
+        } catch (e) {
+          // Fall back to messages from useChat
+        }
+      } else if ((chat as any).messages && Array.isArray((chat as any).messages)) {
+        // Chat instance might have messages property directly
+        messagesToCheck = (chat as any).messages
+      }
+    }
+
+    // Filter to only assistant messages (they're the ones with token usage metadata)
+    const assistantMessages = messagesToCheck.filter((m: any) => m.role === "assistant")
+
+    for (const msg of assistantMessages) {
+      // Check both msg.metadata and (msg as any).experimental_providerMetadata
+      // AI SDK might store metadata in different places
+      const metadata = msg.metadata || (msg as any).experimental_providerMetadata
+      
+      if (metadata) {
+        // Handle both number and string values (in case they're stored as strings)
+        // Also check for undefined/null explicitly
+        const inputTokens = typeof metadata.inputTokens === 'number' && !isNaN(metadata.inputTokens) 
+          ? metadata.inputTokens 
+          : typeof metadata.inputTokens === 'string' 
+            ? parseInt(metadata.inputTokens, 10) || 0 
+            : 0
+        const outputTokens = typeof metadata.outputTokens === 'number' && !isNaN(metadata.outputTokens)
+          ? metadata.outputTokens
+          : typeof metadata.outputTokens === 'string'
+            ? parseInt(metadata.outputTokens, 10) || 0
+            : 0
+        const costUsd = typeof metadata.totalCostUsd === 'number' && !isNaN(metadata.totalCostUsd)
+          ? metadata.totalCostUsd
+          : typeof metadata.totalCostUsd === 'string'
+            ? parseFloat(metadata.totalCostUsd) || 0
+            : 0
+        
+        totalInputTokens += inputTokens
+        totalOutputTokens += outputTokens
+        totalCostUsd += costUsd
       }
     }
 
     const totalTokens = totalInputTokens + totalOutputTokens
+
+    // Always log debug info when we have messages (helps diagnose metadata issues)
+    if (messages.length > 0) {
+      const messagesWithMetadata = assistantMessages.filter(
+        (m: any) => m.metadata || (m as any).experimental_providerMetadata
+      )
+      
+      // Log basic info about messages and metadata
+      if (assistantMessages.length > 0) {
+        const sampleMsg = assistantMessages[0]
+        const sampleMeta = sampleMsg?.metadata || (sampleMsg as any)?.experimental_providerMetadata
+        console.log("[AgentContextIndicator] Messages analysis:")
+        console.log("  Total messages:", messages.length)
+        console.log("  Assistant messages:", assistantMessages.length)
+        console.log("  Messages with metadata:", messagesWithMetadata.length)
+        console.log("  Total tokens:", totalTokens)
+        console.log("  Sample assistant message keys:", sampleMsg ? Object.keys(sampleMsg) : null)
+        console.log("  Sample metadata:", JSON.stringify(sampleMeta, null, 2))
+        console.log("  Sample metadata keys:", sampleMeta ? Object.keys(sampleMeta) : null)
+      }
+      
+      if (assistantMessages.length > 0 && messagesWithMetadata.length === 0) {
+        console.warn("[AgentContextIndicator] ⚠️ No metadata found on assistant messages!")
+      } else if (messagesWithMetadata.length > 0 && totalTokens === 0) {
+        // Metadata exists but tokens are 0 - might be a data issue
+        const sampleMetadata = messagesWithMetadata[0]?.metadata || (messagesWithMetadata[0] as any)?.experimental_providerMetadata
+        console.warn("[AgentContextIndicator] ⚠️ Metadata found but tokens are 0:")
+        console.warn("  Sample metadata (full):", sampleMetadata)
+        console.warn("  Sample metadata keys:", sampleMetadata ? Object.keys(sampleMetadata) : null)
+        // Log first 3 messages with their metadata to see the pattern
+        messagesWithMetadata.slice(0, 3).forEach((m: any, idx: number) => {
+          const meta = m.metadata || (m as any).experimental_providerMetadata
+          console.warn(`  Message ${idx + 1}:`, {
+            id: m.id?.slice(0, 8),
+            role: m.role,
+            hasMetadata: !!m.metadata,
+            hasExperimentalMetadata: !!(m as any).experimental_providerMetadata,
+            inputTokens: meta?.inputTokens,
+            outputTokens: meta?.outputTokens,
+            totalTokens: meta?.totalTokens,
+            metadataKeys: meta ? Object.keys(meta) : [],
+            // Show actual values to see if they're 0, null, or undefined
+            metadataValues: meta ? {
+              inputTokens: meta.inputTokens,
+              outputTokens: meta.outputTokens,
+              totalTokens: meta.totalTokens,
+              sessionId: meta.sessionId,
+              totalCostUsd: meta.totalCostUsd,
+            } : null,
+          })
+        })
+      }
+    }
 
     return {
       inputTokens: totalInputTokens,
@@ -116,7 +219,7 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
       totalTokens,
       totalCostUsd,
     }
-  }, [messages])
+  }, [messages, chat, subChatId])
 
   const contextWindow = CONTEXT_WINDOWS[modelId]
   const percentUsed = Math.min(
@@ -127,6 +230,8 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
   const isEmpty = sessionTotals.totalTokens === 0
 
   const isClickable = onCompact && !disabled && !isCompacting
+
+  // Note: Debug logging is now in sessionTotals useMemo above
 
   return (
     <Tooltip delayDuration={300}>
