@@ -20,6 +20,7 @@ import {
   useAgentSubChatStore,
   type SubChatMeta,
 } from "../../lib/stores/sub-chat-store"
+import { useShallow } from "zustand/react/shallow"
 import {
   ArchiveIcon,
   IconDoubleChevronLeft,
@@ -69,15 +70,16 @@ export function SubChatsSidebar({
   isLoading = false,
   agentName,
 }: SubChatsSidebarProps) {
-  const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
-  const openSubChatIds = useAgentSubChatStore((state) => state.openSubChatIds)
-  const pinnedSubChatIds = useAgentSubChatStore(
-    (state) => state.pinnedSubChatIds,
-  )
-  const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
-  const parentChatId = useAgentSubChatStore((state) => state.chatId)
-  const togglePinSubChat = useAgentSubChatStore(
-    (state) => state.togglePinSubChat,
+  // Use shallow comparison to prevent re-renders when arrays have same content
+  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+    useShallow((state) => ({
+      activeSubChatId: state.activeSubChatId,
+      openSubChatIds: state.openSubChatIds,
+      pinnedSubChatIds: state.pinnedSubChatIds,
+      allSubChats: state.allSubChats,
+      parentChatId: state.chatId,
+      togglePinSubChat: state.togglePinSubChat,
+    }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
 
@@ -354,7 +356,7 @@ export function SubChatsSidebar({
     // Add to allSubChats with placeholder name
     store.addToAllSubChats({
       id: newId,
-      name: "New Agent",
+      name: "New Chat",
       created_at: new Date().toISOString(),
       mode: "agent",
     })
@@ -520,7 +522,7 @@ export function SubChatsSidebar({
         placeholder="Search chats..."
         emptyMessage="No results"
         getItemValue={(subChat) =>
-          `${subChat.name || "New Agent"} ${subChat.id}`
+          `${subChat.name || "New Chat"} ${subChat.id}`
         }
         renderItem={(subChat) => {
           const timeAgo = formatTimeAgo(
@@ -529,7 +531,7 @@ export function SubChatsSidebar({
           return (
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <span className="text-sm truncate">
-                {subChat.name || "New Agent"}
+                {subChat.name || "New Chat"}
               </span>
               <span className="text-sm text-muted-foreground whitespace-nowrap">
                 {timeAgo}
@@ -616,7 +618,7 @@ export function SubChatsSidebar({
               setHoveredChatIndex(globalIndex)
               handleSubChatMouseEnter(
                 subChat.id,
-                subChat.name || "New Agent",
+                subChat.name || "New Chat",
                 e.currentTarget,
               )
             }}
@@ -684,7 +686,7 @@ export function SubChatsSidebar({
                     }}
                     className="truncate block text-sm leading-tight flex-1"
                   >
-                    {subChat.name || "New Agent"}
+                    {subChat.name || "New Chat"}
                   </span>
                   {!isMultiSelectMode && (
                     <button

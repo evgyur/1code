@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { getFileIconByExtension } from "./agents-file-mention"
-import { FilesIcon, SkillIcon, AgentIcon } from "../../../components/ui/icons"
+import { FilesIcon, SkillIcon, CustomAgentIcon, OriginalMCPIcon } from "../../../components/ui/icons"
 import { MENTION_PREFIXES } from "./agents-mentions-editor"
 
 // Custom folder icon matching design
@@ -29,20 +29,21 @@ interface ParsedMention {
   label: string
   path: string
   repository: string
-  type: "file" | "folder" | "skill" | "agent"
+  type: "file" | "folder" | "skill" | "agent" | "tool"
 }
 
 /**
- * Parse file/folder/skill/agent mention ID into its components
- * Format: file:owner/repo:path/to/file.tsx or folder:owner/repo:path/to/folder or skill:skill-name or agent:agent-name
+ * Parse file/folder/skill/agent/tool mention ID into its components
+ * Format: file:owner/repo:path/to/file.tsx or folder:owner/repo:path/to/folder or skill:skill-name or agent:agent-name or tool:mcp__server__toolname
  */
 function parseMention(id: string): ParsedMention | null {
   const isFile = id.startsWith(MENTION_PREFIXES.FILE)
   const isFolder = id.startsWith(MENTION_PREFIXES.FOLDER)
   const isSkill = id.startsWith(MENTION_PREFIXES.SKILL)
   const isAgent = id.startsWith(MENTION_PREFIXES.AGENT)
+  const isTool = id.startsWith(MENTION_PREFIXES.TOOL)
 
-  if (!isFile && !isFolder && !isSkill && !isAgent) return null
+  if (!isFile && !isFolder && !isSkill && !isAgent && !isTool) return null
 
   // Handle skill mentions (simpler format: skill:name)
   if (isSkill) {
@@ -68,6 +69,25 @@ function parseMention(id: string): ParsedMention | null {
     }
   }
 
+  // Handle tool mentions (format: tool:mcp__servername__toolname)
+  if (isTool) {
+    const toolPath = id.slice(MENTION_PREFIXES.TOOL.length)
+    // Extract readable name from tool path (e.g., mcp__figma__get_design -> Get design)
+    const parts = toolPath.split("__")
+    const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
+    const displayName = toolName
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .trim()
+    return {
+      id,
+      label: displayName,
+      path: toolPath,
+      repository: "",
+      type: "tool",
+    }
+  }
+
   const parts = id.split(":")
   if (parts.length < 3) return null
 
@@ -86,29 +106,33 @@ function parseMention(id: string): ParsedMention | null {
 }
 
 /**
- * Component to render a single file/folder/skill/agent mention chip (matching canvas style)
+ * Component to render a single file/folder/skill/agent/tool mention chip (matching canvas style)
  */
 function MentionChip({ mention }: { mention: ParsedMention }) {
   const Icon = mention.type === "skill"
     ? SkillIcon
     : mention.type === "agent"
-      ? AgentIcon
-      : mention.type === "folder"
-        ? FolderOpenIcon
-        : (getFileIconByExtension(mention.label) ?? FilesIcon)
+      ? CustomAgentIcon
+      : mention.type === "tool"
+        ? OriginalMCPIcon
+        : mention.type === "folder"
+          ? FolderOpenIcon
+          : (getFileIconByExtension(mention.label) ?? FilesIcon)
 
   const title = mention.type === "skill"
     ? `Skill: ${mention.label}`
     : mention.type === "agent"
       ? `Agent: ${mention.label}`
-      : `${mention.repository}:${mention.path}`
-  
+      : mention.type === "tool"
+        ? `MCP Tool: ${mention.path}`
+        : `${mention.repository}:${mention.path}`
+
   return (
     <span
       className="inline-flex items-center gap-1 px-[6px] rounded-[6px] text-sm align-middle bg-black/[0.04] dark:bg-white/[0.08] text-foreground/80 select-none"
       title={title}
     >
-      <Icon className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+      <Icon className={mention.type === "tool" ? "h-3.5 w-3.5 text-muted-foreground flex-shrink-0" : "h-3 w-3 text-muted-foreground flex-shrink-0"} />
       <span>{mention.label}</span>
     </span>
   )
@@ -215,8 +239,8 @@ export function extractFileMentions(text: string): ParsedMention[] {
 }
 
 /**
- * Check if text contains any file, folder, skill, or agent mentions
+ * Check if text contains any file, folder, skill, agent, or tool mentions
  */
 export function hasFileMentions(text: string): boolean {
-  return /@\[(file|folder|skill|agent):[^\]]+\]/.test(text)
+  return /@\[(file|folder|skill|agent|tool):[^\]]+\]/.test(text)
 }

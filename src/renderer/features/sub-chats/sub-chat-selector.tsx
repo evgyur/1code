@@ -23,6 +23,7 @@ import {
   useAgentSubChatStore,
   type SubChatMeta,
 } from "../agents/stores/sub-chat-store"
+import { useShallow } from "zustand/react/shallow"
 import { PopoverTrigger } from "../../components/ui/popover"
 import {
   Tooltip,
@@ -80,15 +81,16 @@ export function SubChatSelector({
   isDiffSidebarOpen = false,
   diffStats,
 }: SubChatSelectorProps) {
-  const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
-  const openSubChatIds = useAgentSubChatStore((state) => state.openSubChatIds)
-  const pinnedSubChatIds = useAgentSubChatStore(
-    (state) => state.pinnedSubChatIds,
-  )
-  const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
-  const parentChatId = useAgentSubChatStore((state) => state.chatId)
-  const togglePinSubChat = useAgentSubChatStore(
-    (state) => state.togglePinSubChat,
+  // Use shallow comparison to prevent re-renders when arrays have same content
+  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+    useShallow((state) => ({
+      activeSubChatId: state.activeSubChatId,
+      openSubChatIds: state.openSubChatIds,
+      pinnedSubChatIds: state.pinnedSubChatIds,
+      allSubChats: state.allSubChats,
+      parentChatId: state.chatId,
+      togglePinSubChat: state.togglePinSubChat,
+    }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const subChatUnseenChanges = useAtomValue(agentsSubChatUnseenChangesAtom)
@@ -246,7 +248,7 @@ export function SubChatSelector({
         // Revert on error (like Canvas)
         useAgentSubChatStore
           .getState()
-          .updateSubChatName(subChat.id, oldName || "New Agent")
+          .updateSubChatName(subChat.id, oldName || "New Chat")
       } finally {
         setEditLoading(false)
       }
@@ -536,7 +538,7 @@ export function SubChatSelector({
                           <div className="flex-shrink-0 w-3.5 h-3.5 flex items-center justify-center relative">
                             {isLoading ? (
                               // Loading: show only spinner (replaces entire icon block)
-                              <IconSpinner className="w-3.5 h-3.5 text-muted-foreground" />
+                              <IconSpinner className="w-3.5 h-3.5 text-muted-foreground" size="nano" />
                             ) : (
                               <>
                                 {/* Main mode icon */}
@@ -586,7 +588,7 @@ export function SubChatSelector({
                             }}
                             className="relative z-0 text-left flex-1 min-w-0 pr-1 overflow-hidden block whitespace-nowrap"
                           >
-                            {subChat.name || "New Agent"}
+                            {subChat.name || "New Chat"}
                           </span>
                         )}
 
@@ -700,7 +702,7 @@ export function SubChatSelector({
             placeholder="Search chats..."
             emptyMessage="No results"
             getItemValue={(subChat) =>
-              `${subChat.name || "New Agent"} ${subChat.id}`
+              `${subChat.name || "New Chat"} ${subChat.id}`
             }
             renderItem={(subChat) => {
               const timeAgo = formatTimeAgo(
@@ -709,7 +711,7 @@ export function SubChatSelector({
               return (
                 <div className="flex items-center gap-2 flex-1 min-w-0">
                   <span className="text-sm truncate">
-                    {subChat.name || "New Agent"}
+                    {subChat.name || "New Chat"}
                   </span>
                   <span className="text-sm text-muted-foreground whitespace-nowrap">
                     {timeAgo}

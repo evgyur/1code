@@ -48,7 +48,7 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
 
   return (
     <>
-      <div className="flex justify-start">
+      <div className="flex justify-start drop-shadow-[0_10px_20px_hsl(var(--background))]" data-user-bubble>
         <div className="space-y-2 w-full">
           {/* Show attached images from stored message */}
           {imageParts.length > 0 && (
@@ -82,7 +82,7 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
               ref={contentRef}
               onClick={() => showGradient && setIsExpanded(true)}
               className={cn(
-                "relative max-h-[100px] overflow-hidden bg-input-background border px-3 py-2 rounded-xl whitespace-pre-wrap text-sm transition-[filter] shadow-xl shadow-background",
+                "relative max-h-[100px] overflow-hidden bg-input-background border px-3 py-2 rounded-xl whitespace-pre-wrap text-sm transition-[filter]",
                 showGradient && "cursor-pointer hover:brightness-110",
               )}
             >

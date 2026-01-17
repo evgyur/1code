@@ -6,6 +6,7 @@ import { HiArrowTopRightOnSquare, HiMiniMinus, HiMiniPlus } from "react-icons/hi
 import { trpc } from "../../lib/trpc";
 import { useChangesStore } from "../../lib/stores/changes-store";
 import { usePRStatus } from "../../hooks/usePRStatus";
+import { useFileChangeListener } from "../../lib/hooks/use-file-change-listener";
 import type { ChangeCategory, ChangedFile } from "../../../shared/changes-types";
 
 import { CategorySection } from "./components/CategorySection";
@@ -39,6 +40,9 @@ export function ChangesView({
 	// Debug: Log worktreePath on mount and changes
 	console.log("[ChangesView] Mounted with worktreePath:", worktreePath);
 
+	// Listen for file changes from Claude Write/Edit tools
+	useFileChangeListener(worktreePath);
+
 	const { baseBranch } = useChangesStore();
 	const { data: branchData, error: branchError } = trpc.changes.getBranches.useQuery(
 		{ worktreePath: worktreePath || "" },
@@ -59,8 +63,10 @@ export function ChangesView({
 		{ worktreePath: worktreePath || "", defaultBranch: effectiveBaseBranch },
 		{
 			enabled: !!worktreePath,
-			refetchInterval: 2500,
+			// No polling - updates triggered by file-changed events from Claude tools
 			refetchOnWindowFocus: true,
+			staleTime: 30000,
+			placeholderData: (prev) => prev,
 		},
 	);
 

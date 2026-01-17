@@ -139,7 +139,7 @@ export function MobileChatHeader({
         side="bottom"
         sideOffset={8}
         getItemValue={(subChat) =>
-          `${subChat.name || "New Agent"} ${subChat.id}`
+          `${subChat.name || "New Chat"} ${subChat.id}`
         }
         renderItem={(subChat) => {
           const timeAgo = formatTimeAgo(
@@ -154,7 +154,7 @@ export function MobileChatHeader({
               )}
             >
               <span className="text-sm truncate">
-                {subChat.name || "New Agent"}
+                {subChat.name || "New Chat"}
               </span>
               <span className="text-sm text-muted-foreground whitespace-nowrap">
                 {timeAgo}
@@ -189,7 +189,7 @@ export function MobileChatHeader({
 
               {/* Name */}
               <span className="truncate text-left">
-                {activeSubChat?.name || "New Agent"}
+                {activeSubChat?.name || "New Chat"}
               </span>
 
               {/* Chevron */}

@@ -1,5 +1,6 @@
 import { cn } from "../../../lib/utils"
-import { ArrowUp, Loader2, Square } from "lucide-react"
+import { ArrowUp, Square } from "lucide-react"
+import { IconSpinner } from "../../../icons"
 
 interface AgentSendButtonProps {
   /** Whether the system is currently streaming */
@@ -45,7 +46,7 @@ export function AgentSendButton({
       return <Square className="size-3 fill-current" />
     }
     if (isSubmitting) {
-      return <Loader2 className="size-4 animate-spin" />
+      return <IconSpinner className="size-4" />
     }
     return <ArrowUp className="size-4" />
   }

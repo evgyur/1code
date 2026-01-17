@@ -12,20 +12,24 @@ import {
 } from "react"
 import { createFileIconElement } from "./agents-file-mention"
 
+// Threshold for skipping expensive trigger detection (characters)
+const LARGE_TEXT_THRESHOLD = 50000
+
 export interface FileMentionOption {
-  id: string // file:owner/repo:path/to/file.tsx or folder:owner/repo:path/to/folder or skill:skill-name
-  label: string // filename or folder name or skill name
+  id: string // file:owner/repo:path/to/file.tsx or folder:owner/repo:path/to/folder or skill:skill-name or tool:mcp-tool-name
+  label: string // filename or folder name or skill name or tool name
   path: string // full path or skill description
   repository: string
   truncatedPath?: string // directory path for inline display or skill description
   additions?: number // for changed files
   deletions?: number // for changed files
-  type?: "file" | "folder" | "skill" | "agent" | "category" // entry type (default: file)
-  // Extended data for rich tooltips (skills/agents)
-  description?: string // skill/agent description
+  type?: "file" | "folder" | "skill" | "agent" | "category" | "tool" // entry type (default: file)
+  // Extended data for rich tooltips (skills/agents/tools)
+  description?: string // skill/agent/tool description
   tools?: string[] // agent allowed tools
   model?: string // agent model
   source?: "user" | "project" // skill/agent source
+  mcpServer?: string // MCP server name for tools
 }
 
 // Mention ID prefixes
@@ -34,6 +38,7 @@ export const MENTION_PREFIXES = {
   FOLDER: "folder:",
   SKILL: "skill:",
   AGENT: "agent:",
+  TOOL: "tool:", // MCP tools
 } as const
 
 type TriggerPayload = {
@@ -216,6 +221,23 @@ function buildContentFromSerialized(
       const skillName = id.slice(MENTION_PREFIXES.SKILL.length)
       option = { id, label: skillName, path: "", repository: "", type: "skill" }
     }
+    if (!option && id.startsWith(MENTION_PREFIXES.AGENT)) {
+      // Parse agent mention: agent:agent-name
+      const agentName = id.slice(MENTION_PREFIXES.AGENT.length)
+      option = { id, label: agentName, path: "", repository: "", type: "agent" }
+    }
+    if (!option && id.startsWith(MENTION_PREFIXES.TOOL)) {
+      // Parse tool mention: tool:mcp__servername__toolname
+      const toolPath = id.slice(MENTION_PREFIXES.TOOL.length)
+      // Extract readable name from tool path (e.g., mcp__figma__get_design -> Get design)
+      const parts = toolPath.split("__")
+      const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
+      const displayName = toolName
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim()
+      option = { id, label: displayName, path: toolPath, repository: "", type: "tool" }
+    }
     if (option) {
       root.appendChild(createMentionNode(option))
       root.appendChild(document.createTextNode(" "))
@@ -253,6 +275,15 @@ function walkTreeOnce(root: HTMLElement, range: Range | null): TreeWalkResult {
   let slashPosition: { node: Node; offset: number } | null = null
   let slashIndex = -1
 
+  // Handle case where cursor is in root element (not in a text node)
+  // This happens when the editor is empty or cursor is at element boundary
+  let cursorInRoot = false
+  let cursorRootOffset = 0
+  if (range && range.endContainer === root) {
+    cursorInRoot = true
+    cursorRootOffset = range.endOffset
+  }
+
   const walker = document.createTreeWalker(
     root,
     NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
@@ -263,9 +294,24 @@ function walkTreeOnce(root: HTMLElement, range: Range | null): TreeWalkResult {
     if (node.nodeType === Node.TEXT_NODE) {
       const text = node.textContent || ""
 
-      // Check if cursor is in this node
-      if (range && !reachedCursor && node === range.endContainer) {
-        const cursorOffset = range.endOffset
+      // Check if cursor is in this node (direct case)
+      const cursorInThisNode = range && !reachedCursor && node === range.endContainer
+
+      // Handle cursor in root element - cursor is positioned between children
+      // cursorRootOffset indicates the child index where cursor is
+      let cursorAtRootBoundary = false
+      if (cursorInRoot && !reachedCursor && node.parentNode === root) {
+        const children = Array.from(root.childNodes)
+        const nodeIndex = children.indexOf(node as ChildNode)
+        // If cursor is after this node, include full text
+        // If cursor is at this node's position, we've passed the cursor
+        if (nodeIndex >= cursorRootOffset) {
+          cursorAtRootBoundary = true
+        }
+      }
+
+      if (cursorInThisNode) {
+        const cursorOffset = range!.endOffset
         textBeforeCursor += text.slice(0, cursorOffset)
         reachedCursor = true
 
@@ -274,12 +320,21 @@ function walkTreeOnce(root: HTMLElement, range: Range | null): TreeWalkResult {
         const localAtIdx = textBeforeInNode.lastIndexOf("@")
         if (localAtIdx !== -1) {
           const globalAtIdx = serialized.length + localAtIdx
-          // Check if this @ is the most recent one
-          if (globalAtIdx > atIndex) {
+
+          // Check character before @ - must be start of text, whitespace, or newline (not part of email/word)
+          const textUpToAt = serialized + textBeforeInNode.slice(0, localAtIdx)
+          const charBefore = globalAtIdx > 0 ? textUpToAt.charAt(globalAtIdx - 1) : null
+          const isStandaloneAt = charBefore === null || /\s/.test(charBefore)
+
+          // Check if this @ is the most recent one AND is standalone
+          if (isStandaloneAt && globalAtIdx > atIndex) {
             const afterAt = textBeforeCursor.slice(
               textBeforeCursor.lastIndexOf("@") + 1,
             )
-            if (!afterAt.includes(" ") && !afterAt.includes("\n")) {
+            // Close on newline or double-space (not single space - allow multi-word search)
+            const hasNewline = afterAt.includes("\n")
+            const hasDoubleSpace = afterAt.includes("  ")
+            if (!hasNewline && !hasDoubleSpace) {
               atIndex = globalAtIdx
               atPosition = { node, offset: localAtIdx }
             }
@@ -308,13 +363,25 @@ function walkTreeOnce(root: HTMLElement, range: Range | null): TreeWalkResult {
             }
           }
         }
+      } else if (cursorAtRootBoundary) {
+        // Cursor is in root element, at or past this node's position
+        // Mark as reached and don't include this text in textBeforeCursor
+        reachedCursor = true
       } else if (!reachedCursor) {
         textBeforeCursor += text
-        // Track @ positions as we go
+        // Track @ positions as we go (only if standalone - not part of email/word)
         const localAtIdx = text.lastIndexOf("@")
         if (localAtIdx !== -1) {
-          atIndex = serialized.length + localAtIdx
-          atPosition = { node, offset: localAtIdx }
+          const globalAtIdx = serialized.length + localAtIdx
+          // Check character before @ - must be start of text, whitespace, or newline
+          const textUpToAt = serialized + text.slice(0, localAtIdx)
+          const charBefore = globalAtIdx > 0 ? textUpToAt.charAt(globalAtIdx - 1) : null
+          const isStandaloneAt = charBefore === null || /\s/.test(charBefore)
+
+          if (isStandaloneAt) {
+            atIndex = globalAtIdx
+            atPosition = { node, offset: localAtIdx }
+          }
         }
       }
 
@@ -383,10 +450,12 @@ function walkTreeOnce(root: HTMLElement, range: Range | null): TreeWalkResult {
     node = walker.nextNode()
   }
 
-  // Validate @ trigger - check if space/newline after it
+  // Validate @ trigger - close on newline or double-space (allow single spaces for multi-word search)
   if (atIndex !== -1) {
     const afterAt = textBeforeCursor.slice(atIndex + 1)
-    if (afterAt.includes(" ") || afterAt.includes("\n")) {
+    const hasNewline = afterAt.includes("\n")
+    const hasDoubleSpace = afterAt.includes("  ")
+    if (hasNewline || hasDoubleSpace) {
       atIndex = -1
       atPosition = null
     }
@@ -459,6 +528,21 @@ export const AgentsMentionsEditor = memo(
             const skillName = id.slice(MENTION_PREFIXES.SKILL.length)
             return { id, label: skillName, path: "", repository: "", type: "skill" }
           }
+          if (id.startsWith(MENTION_PREFIXES.AGENT)) {
+            const agentName = id.slice(MENTION_PREFIXES.AGENT.length)
+            return { id, label: agentName, path: "", repository: "", type: "agent" }
+          }
+          if (id.startsWith(MENTION_PREFIXES.TOOL)) {
+            const toolPath = id.slice(MENTION_PREFIXES.TOOL.length)
+            // Extract readable name from tool path (e.g., mcp__figma__get_design -> Get design)
+            const parts = toolPath.split("__")
+            const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
+            const displayName = toolName
+              .replace(/_/g, " ")
+              .replace(/\b\w/g, (c) => c.toUpperCase())
+              .trim()
+            return { id, label: displayName, path: toolPath, repository: "", type: "tool" }
+          }
           return null
         },
         [],
@@ -527,23 +611,24 @@ export const AgentsMentionsEditor = memo(
         }
       }, [])
 
+      // Trigger detection timeout ref for cleanup
+      const triggerDetectionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
       // Handle input - UNCONTROLLED: no onChange, just @ and / trigger detection
       const handleInput = useCallback(() => {
         if (!editorRef.current) return
 
-        // Update placeholder visibility and notify parent
+        // Update placeholder visibility and notify parent IMMEDIATELY (cheap operation)
         // Use textContent without trim() so placeholder hides even with just spaces
-        const content = editorRef.current.textContent
+        const content = editorRef.current.textContent || ""
         const newHasContent = !!content
         setHasContent(newHasContent)
         onContentChange?.(newHasContent)
 
-        // Get selection for cursor position
-        const sel = window.getSelection()
-        const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null
-
-        // Handle non-collapsed selection (close triggers)
-        if (range && !range.collapsed) {
+        // Skip expensive trigger detection for very large text
+        // This prevents UI freeze when pasting large content
+        if (content.length > LARGE_TEXT_THRESHOLD) {
+          // Close any open triggers since we can't detect them
           if (triggerActive.current) {
             triggerActive.current = false
             triggerStartIndex.current = null
@@ -557,78 +642,118 @@ export const AgentsMentionsEditor = memo(
           return
         }
 
-        // Single tree walk for @ and / trigger detection
-        const {
-          textBeforeCursor,
-          atPosition,
-          atIndex,
-          slashPosition,
-          slashIndex,
-        } = walkTreeOnce(editorRef.current, range)
+        // Clear previous timeout
+        if (triggerDetectionTimeout.current) {
+          clearTimeout(triggerDetectionTimeout.current)
+        }
 
-        // Handle @ trigger (takes priority over /)
-        if (atIndex !== -1 && atPosition) {
-          triggerActive.current = true
-          triggerStartIndex.current = atIndex
+        // For short content, run trigger detection immediately
+        // For longer content, debounce to avoid performance issues
+        const runTriggerDetection = () => {
+          if (!editorRef.current) return
 
-          // Close slash trigger if active
+          // Get selection for cursor position
+          const sel = window.getSelection()
+          const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null
+
+          // Handle non-collapsed selection (close triggers)
+          if (range && !range.collapsed) {
+            if (triggerActive.current) {
+              triggerActive.current = false
+              triggerStartIndex.current = null
+              onCloseTrigger()
+            }
+            if (slashTriggerActive.current) {
+              slashTriggerActive.current = false
+              slashTriggerStartIndex.current = null
+              onCloseSlashTrigger?.()
+            }
+            return
+          }
+
+          // Single tree walk for @ and / trigger detection
+          const {
+            textBeforeCursor,
+            atPosition,
+            atIndex,
+            slashPosition,
+            slashIndex,
+          } = walkTreeOnce(editorRef.current, range)
+
+          // Handle @ trigger (takes priority over /)
+          if (atIndex !== -1 && atPosition) {
+            triggerActive.current = true
+            triggerStartIndex.current = atIndex
+
+            // Close slash trigger if active
+            if (slashTriggerActive.current) {
+              slashTriggerActive.current = false
+              slashTriggerStartIndex.current = null
+              onCloseSlashTrigger?.()
+            }
+
+            const afterAt = textBeforeCursor.slice(atIndex + 1)
+
+            // Get position for dropdown
+            if (atPosition.node.nodeType === Node.TEXT_NODE) {
+              const tempRange = document.createRange()
+              tempRange.setStart(atPosition.node, atPosition.offset)
+              tempRange.setEnd(atPosition.node, atPosition.offset + 1)
+              const rect = tempRange.getBoundingClientRect()
+              onTrigger({ searchText: afterAt, rect })
+              return
+            }
+          }
+
+          // Close @ trigger if no @ found
+          if (triggerActive.current) {
+            triggerActive.current = false
+            triggerStartIndex.current = null
+            onCloseTrigger()
+          }
+
+          // Handle / trigger (only if @ trigger is not active)
+          if (slashIndex !== -1 && slashPosition && onSlashTrigger) {
+            slashTriggerActive.current = true
+            slashTriggerStartIndex.current = slashIndex
+
+            const afterSlash = textBeforeCursor.slice(slashIndex + 1)
+
+            // Get position for dropdown
+            if (slashPosition.node.nodeType === Node.TEXT_NODE) {
+              const tempRange = document.createRange()
+              tempRange.setStart(slashPosition.node, slashPosition.offset)
+              tempRange.setEnd(slashPosition.node, slashPosition.offset + 1)
+              const rect = tempRange.getBoundingClientRect()
+              onSlashTrigger({ searchText: afterSlash, rect })
+              return
+            }
+          }
+
+          // Close / trigger if no / found
           if (slashTriggerActive.current) {
             slashTriggerActive.current = false
             slashTriggerStartIndex.current = null
             onCloseSlashTrigger?.()
           }
+        }
 
-          const afterAt = textBeforeCursor.slice(atIndex + 1)
+        // Run immediately for short content, debounce for longer
+        if (content.length < 1000) {
+          runTriggerDetection()
+        } else {
+          triggerDetectionTimeout.current = setTimeout(runTriggerDetection, 16)
+        }
+      }, [onContentChange, onTrigger, onCloseTrigger, onSlashTrigger, onCloseSlashTrigger])
 
-          // Get position for dropdown
-          if (atPosition.node.nodeType === Node.TEXT_NODE) {
-            const tempRange = document.createRange()
-            tempRange.setStart(atPosition.node, atPosition.offset)
-            tempRange.setEnd(atPosition.node, atPosition.offset + 1)
-            const rect = tempRange.getBoundingClientRect()
-            onTrigger({ searchText: afterAt, rect })
-            return
+      // Cleanup timeout on unmount
+      useEffect(() => {
+        return () => {
+          if (triggerDetectionTimeout.current) {
+            clearTimeout(triggerDetectionTimeout.current)
           }
         }
-
-        // Close @ trigger if no @ found
-        if (triggerActive.current) {
-          triggerActive.current = false
-          triggerStartIndex.current = null
-          onCloseTrigger()
-        }
-
-        // Handle / trigger (only if @ trigger is not active)
-        if (slashIndex !== -1 && slashPosition && onSlashTrigger) {
-          slashTriggerActive.current = true
-          slashTriggerStartIndex.current = slashIndex
-
-          const afterSlash = textBeforeCursor.slice(slashIndex + 1)
-
-          // Get position for dropdown
-          if (slashPosition.node.nodeType === Node.TEXT_NODE) {
-            const tempRange = document.createRange()
-            tempRange.setStart(slashPosition.node, slashPosition.offset)
-            tempRange.setEnd(slashPosition.node, slashPosition.offset + 1)
-            const rect = tempRange.getBoundingClientRect()
-            onSlashTrigger({ searchText: afterSlash, rect })
-            return
-          }
-        }
-
-        // Close / trigger if no / found
-        if (slashTriggerActive.current) {
-          slashTriggerActive.current = false
-          slashTriggerStartIndex.current = null
-          onCloseSlashTrigger?.()
-        }
-      }, [
-        onTrigger,
-        onCloseTrigger,
-        onSlashTrigger,
-        onCloseSlashTrigger,
-        onContentChange,
-      ])
+      }, [])
 
       // Handle keydown
       const handleKeyDown = useCallback(
@@ -707,6 +832,15 @@ export const AgentsMentionsEditor = memo(
             const newHasContent = !!value
             setHasContent(newHasContent)
             onContentChange?.(newHasContent)
+
+            // Position cursor at the end of content
+            if (newHasContent) {
+              const sel = window.getSelection()
+              if (sel) {
+                sel.selectAllChildren(editorRef.current)
+                sel.collapseToEnd()
+              }
+            }
           },
 
           // Clear editor content

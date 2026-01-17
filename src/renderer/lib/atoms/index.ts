@@ -163,7 +163,7 @@ export const clearSubChatSelectionAtom = atom(null, (_get, set) => {
 // ============================================
 
 // Settings dialog
-export type SettingsTab = "profile" | "appearance" | "preferences" | "skills" | "agents" | "debug"
+export type SettingsTab = "profile" | "appearance" | "preferences" | "skills" | "agents" | "mcp" | "debug"
 export const agentsSettingsDialogActiveTabAtom = atom<SettingsTab>("profile")
 export const agentsSettingsDialogOpenAtom = atom<boolean>(false)
 
@@ -367,6 +367,40 @@ export const isFullscreenAtom = atom<boolean | null>(null)
 export const anthropicOnboardingCompletedAtom = atomWithStorage<boolean>(
   "onboarding:anthropic-completed",
   false,
+  undefined,
+  { getOnInit: true },
+)
+
+// ============================================
+// SESSION INFO ATOMS (MCP, Plugins, Tools)
+// ============================================
+
+export type MCPServerStatus = "connected" | "failed" | "pending" | "needs-auth"
+
+export type MCPServer = {
+  name: string
+  status: MCPServerStatus
+  serverInfo?: {
+    name: string
+    version: string
+  }
+  error?: string
+}
+
+export type SessionInfo = {
+  tools: string[]
+  mcpServers: MCPServer[]
+  plugins: { name: string; path: string }[]
+  skills: string[]
+}
+
+// Session info from SDK init message
+// Contains MCP servers, plugins, available tools, and skills
+// Persisted to localStorage so MCP tools are visible after page refresh
+// Updated when a new chat session starts
+export const sessionInfoAtom = atomWithStorage<SessionInfo | null>(
+  "21st-session-info",
+  null,
   undefined,
   { getOnInit: true },
 )

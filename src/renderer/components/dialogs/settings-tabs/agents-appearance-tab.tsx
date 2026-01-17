@@ -1,5 +1,6 @@
 import { useTheme } from "next-themes"
 import { useState, useEffect, useCallback, useMemo } from "react"
+import { IconSpinner } from "../../../icons"
 import { useAtom, useSetAtom } from "jotai"
 import { motion, AnimatePresence } from "motion/react"
 import { cn } from "../../../lib/utils"
@@ -291,7 +292,7 @@ export function AgentsAppearanceTab() {
     return (
       <div className="p-6 space-y-6">
         <div className="h-48 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
+          <IconSpinner className="h-8 w-8 text-foreground" />
         </div>
       </div>
     )

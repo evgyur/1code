@@ -8,9 +8,16 @@ interface TRPCProviderProps {
   children: React.ReactNode
 }
 
+// Global query client instance for use outside React components
+let globalQueryClient: QueryClient | null = null
+
+export function getQueryClient(): QueryClient | null {
+  return globalQueryClient
+}
+
 export function TRPCProvider({ children }: TRPCProviderProps) {
   const [queryClient] = useState(() => {
-    return new QueryClient({
+    const client = new QueryClient({
       defaultOptions: {
         queries: {
           staleTime: 5000,
@@ -24,6 +31,8 @@ export function TRPCProvider({ children }: TRPCProviderProps) {
         },
       },
     })
+    globalQueryClient = client
+    return client
   })
 
   const [trpcClient] = useState(() => {

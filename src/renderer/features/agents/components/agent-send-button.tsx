@@ -63,7 +63,7 @@ export function AgentSendButton({
   const getIcon = () => {
     if (isStreaming) {
       return (
-        <div className="w-3 h-3 bg-current rounded-[2px] flex-shrink-0 mx-auto" />
+        <div className="w-2.5 h-2.5 bg-current rounded-[2px] flex-shrink-0 mx-auto" />
       )
     }
     if (isSubmitting) {
@@ -111,7 +111,7 @@ export function AgentSendButton({
 
   // Mode-specific styling (agent=foreground, plan=orange)
   const modeClass = isPlanMode
-    ? "!bg-plan-mode hover:!bg-plan-mode/90 !text-plan-mode-foreground !shadow-none"
+    ? "!bg-plan-mode hover:!bg-plan-mode/90 !text-background !shadow-none"
     : "!bg-foreground hover:!bg-foreground/90 !text-background !shadow-none"
 
   return (

@@ -3,6 +3,7 @@ import { Button } from "../../ui/button"
 import { Input } from "../../ui/input"
 import { Label } from "../../ui/label"
 import { IconSpinner } from "../../../icons"
+import { toast } from "sonner"
 
 // Hook to detect narrow screen
 function useIsNarrowScreen(): boolean {
@@ -51,10 +52,24 @@ export function AgentsProfileTab() {
 
   const handleSave = async () => {
     setIsSaving(true)
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    setIsSaving(false)
-    console.log("Mock: Profile saved", { fullName })
+    try {
+      if (window.desktopApi?.updateUser) {
+        const updatedUser = await window.desktopApi.updateUser({ name: fullName })
+        if (updatedUser) {
+          setUser(updatedUser)
+          toast.success("Profile updated successfully")
+        }
+      } else {
+        throw new Error("Desktop API not available")
+      }
+    } catch (error) {
+      console.error("Error updating profile:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update profile"
+      )
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   if (isLoading) {

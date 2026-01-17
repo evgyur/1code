@@ -9,6 +9,10 @@ export const selectedAgentChatIdAtom = atomWithStorage<string | null>(
   { getOnInit: true },
 )
 
+// Previous agent chat ID - used to navigate back after archiving current chat
+// Not persisted - only tracks within current session
+export const previousAgentChatIdAtom = atom<string | null>(null)
+
 // Selected draft ID - when user clicks on a draft in sidebar, this is set
 // NewChatForm uses this to restore the draft text
 // Reset to null when "New Workspace" is clicked or chat is created
@@ -329,10 +333,40 @@ export type AgentsMobileViewMode = "chats" | "chat" | "preview" | "diff" | "term
 export const agentsMobileViewModeAtom = atom<AgentsMobileViewMode>("chat")
 
 // Scroll position persistence per sub-chat
-// Maps subChatId to scroll position (in pixels)
+// Maps subChatId to scroll data with validation metadata
+export interface ScrollPositionData {
+  scrollTop: number // Saved scroll position in pixels
+  scrollHeight: number // Total scrollable height at save time (for validation)
+  messageCount: number // Number of messages at save time (for validation)
+  wasStreaming: boolean // Was chat streaming when we left?
+  lastAssistantMsgId?: string // ID of last assistant message when we left
+}
+
 export const agentsScrollPositionsAtom = atomWithStorage<
-  Record<string, number>
->("agents-scroll-positions", {}, undefined, { getOnInit: true })
+  Record<string, ScrollPositionData>
+>("agents-scroll-positions-v2", {}, undefined, { getOnInit: true })
+
+// Module-level cache for SYNCHRONOUS scroll position access during tab switches.
+// The Jotai atom is async (state updates are batched), so we need this cache
+// to ensure we always read the latest saved position immediately.
+const scrollPositionsCache = new Map<string, ScrollPositionData>()
+
+export const scrollPositionsCacheStore = {
+  get: (subChatId: string): ScrollPositionData | undefined =>
+    scrollPositionsCache.get(subChatId),
+
+  set: (subChatId: string, data: ScrollPositionData) => {
+    scrollPositionsCache.set(subChatId, data)
+  },
+
+  delete: (subChatId: string) => {
+    scrollPositionsCache.delete(subChatId)
+  },
+
+  clear: () => {
+    scrollPositionsCache.clear()
+  },
+}
 
 // Debug mode for testing first-time user experience
 // Only works in development mode
@@ -382,6 +416,10 @@ export const subChatFilesAtom = atom<Map<string, SubChatFileChange[]>>(
   new Map(),
 )
 
+// Mapping from subChatId to chatId (workspace ID) for aggregating stats
+// Map<subChatId, chatId>
+export const subChatToChatMapAtom = atom<Map<string, string>>(new Map())
+
 // Filter files for diff sidebar (null = show all files)
 // When set, AgentDiffView will only show files matching these paths
 export const filteredDiffFilesAtom = atom<string[] | null>(null)
@@ -427,7 +465,8 @@ export const lastSelectedBranchesAtom = atomWithStorage<Record<string, string>>(
 )
 
 // Compacting status per sub-chat
-// Map<subChatId, { status: "compacting" | "idle", lastCompact?: { trigger, preTokens } }>
+// Set<subChatId> - subChats currently being compacted
+export const compactingSubChatsAtom = atom<Set<string>>(new Set())
 
 // Track IDs of chats/subchats created in this browser session (NOT persisted - resets on reload)
 // Used to determine whether to show placeholder + typewriter effect
@@ -450,6 +489,18 @@ export type PendingUserQuestions = {
 }
 export const pendingUserQuestionsAtom = atom<PendingUserQuestions | null>(null)
 
+// Track sub-chats with pending plan approval (plan ready but not yet implemented)
+// Set<subChatId>
+export const pendingPlanApprovalsAtom = atom<Set<string>>(new Set())
+
 // Store AskUserQuestion results by toolUseId for real-time updates
 // Map<toolUseId, result>
 export const askUserQuestionResultsAtom = atom<Map<string, unknown>>(new Map())
+
+// Unified undo stack for workspace and sub-chat archivation
+// Supports Cmd+Z to restore the last archived item (workspace or sub-chat)
+export type UndoItem =
+  | { type: "workspace"; chatId: string; timeoutId: ReturnType<typeof setTimeout> }
+  | { type: "subchat"; subChatId: string; chatId: string; timeoutId: ReturnType<typeof setTimeout> }
+
+export const undoStackAtom = atom<UndoItem[]>([])

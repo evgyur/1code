@@ -8,6 +8,7 @@ import {
   agentsSubChatsSidebarModeAtom,
   pendingUserQuestionsAtom,
 } from "../atoms"
+import { trpc } from "../../../lib/trpc"
 import { X, Plus, AlignJustify, Play } from "lucide-react"
 import {
   IconSpinner,
@@ -25,6 +26,7 @@ import {
   useAgentSubChatStore,
   type SubChatMeta,
 } from "../stores/sub-chat-store"
+import { useShallow } from "zustand/react/shallow"
 import { PopoverTrigger } from "../../../components/ui/popover"
 import {
   Tooltip,
@@ -75,15 +77,16 @@ export function SubChatSelector({
   isDiffSidebarOpen = false,
   diffStats,
 }: SubChatSelectorProps) {
-  const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
-  const openSubChatIds = useAgentSubChatStore((state) => state.openSubChatIds)
-  const pinnedSubChatIds = useAgentSubChatStore(
-    (state) => state.pinnedSubChatIds,
-  )
-  const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
-  const parentChatId = useAgentSubChatStore((state) => state.chatId)
-  const togglePinSubChat = useAgentSubChatStore(
-    (state) => state.togglePinSubChat,
+  // Use shallow comparison to prevent re-renders when arrays have same content
+  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+    useShallow((state) => ({
+      activeSubChatId: state.activeSubChatId,
+      openSubChatIds: state.openSubChatIds,
+      pinnedSubChatIds: state.pinnedSubChatIds,
+      allSubChats: state.allSubChats,
+      parentChatId: state.chatId,
+      togglePinSubChat: state.togglePinSubChat,
+    }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const subChatUnseenChanges = useAtomValue(agentsSubChatUnseenChangesAtom)
@@ -92,6 +95,21 @@ export function SubChatSelector({
     agentsSubChatsSidebarModeAtom,
   )
   const pendingQuestions = useAtomValue(pendingUserQuestionsAtom)
+
+  // Pending plan approvals from DB - only for open sub-chats
+  const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
+    { openSubChatIds },
+    { refetchInterval: 5000, enabled: openSubChatIds.length > 0, placeholderData: (prev) => prev }
+  )
+  const pendingPlanApprovals = useMemo(() => {
+    const set = new Set<string>()
+    if (pendingPlanApprovalsData) {
+      for (const { subChatId } of pendingPlanApprovalsData) {
+        set.add(subChatId)
+      }
+    }
+    return set
+  }, [pendingPlanApprovalsData])
 
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
   const tabsContainerRef = useRef<HTMLDivElement>(null)
@@ -242,7 +260,7 @@ export function SubChatSelector({
         // Revert on error (like Canvas)
         useAgentSubChatStore
           .getState()
-          .updateSubChatName(subChat.id, oldName || "New Agent")
+          .updateSubChatName(subChat.id, oldName || "New Chat")
       } finally {
         setEditLoading(false)
       }
@@ -492,6 +510,8 @@ export function SubChatSelector({
                 const mode = subChat.mode || "agent"
                 // Check if this chat is waiting for user answer
                 const hasPendingQuestion = pendingQuestions?.subChatId === subChat.id
+                // Check if this chat has a pending plan approval
+                const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
 
                 return (
                   <ContextMenu key={subChat.id}>
@@ -546,15 +566,17 @@ export function SubChatSelector({
                                 ) : (
                                   <AgentIcon className="w-3.5 h-3.5 text-muted-foreground" />
                                 )}
-                                {/* Badge in bottom-right corner: unseen dot > pin icon */}
-                                {(hasUnseen || isPinned) && (
+                                {/* Badge in bottom-right corner: amber dot (plan) > unseen dot > pin icon */}
+                                {(hasPendingPlan || hasUnseen || isPinned) && (
                                   <div
                                     className={cn(
                                       "absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full flex items-center justify-center",
                                       isActive ? "bg-muted" : "bg-background",
                                     )}
                                   >
-                                    {hasUnseen ? (
+                                    {hasPendingPlan ? (
+                                      <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                    ) : hasUnseen ? (
                                       <div className="w-1.5 h-1.5 rounded-full bg-[#307BD0]" />
                                     ) : isPinned ? (
                                       <PinFilledIcon className="w-2 h-2 text-muted-foreground" />
@@ -587,7 +609,7 @@ export function SubChatSelector({
                             }}
                             className="relative z-0 text-left flex-1 min-w-0 pr-1 overflow-hidden block whitespace-nowrap"
                           >
-                            {subChat.name || "New Agent"}
+                            {subChat.name || "New Chat"}
                           </span>
                         )}
 
@@ -701,7 +723,7 @@ export function SubChatSelector({
             placeholder="Search chats..."
             emptyMessage="No results"
             getItemValue={(subChat) =>
-              `${subChat.name || "New Agent"} ${subChat.id}`
+              `${subChat.name || "New Chat"} ${subChat.id}`
             }
             renderItem={(subChat) => {
               const timeAgo = formatTimeAgo(
@@ -711,6 +733,7 @@ export function SubChatSelector({
               const hasUnseen = subChatUnseenChanges.has(subChat.id)
               const mode = subChat.mode || "agent"
               const hasPendingQuestion = pendingQuestions?.subChatId === subChat.id
+              const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
 
               return (
                 <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -725,14 +748,17 @@ export function SubChatSelector({
                     ) : (
                       <AgentIcon className="w-4 h-4 text-muted-foreground" />
                     )}
-                    {hasUnseen && !isLoading && !hasPendingQuestion && (
+                    {(hasPendingPlan || hasUnseen) && !isLoading && !hasPendingQuestion && (
                       <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-popover flex items-center justify-center">
-                        <div className="w-1.5 h-1.5 rounded-full bg-[#307BD0]" />
+                        <div className={cn(
+                          "w-1.5 h-1.5 rounded-full",
+                          hasPendingPlan ? "bg-amber-500" : "bg-[#307BD0]"
+                        )} />
                       </div>
                     )}
                   </div>
                   <span className="text-sm truncate flex-1">
-                    {subChat.name || "New Agent"}
+                    {subChat.name || "New Chat"}
                   </span>
                   <span className="text-sm text-muted-foreground whitespace-nowrap">
                     {timeAgo}

@@ -37,7 +37,7 @@ export async function autoRenameAgentChat({
     const { name } = await generateName(userMessage)
     console.log("[auto-rename] Generated name:", name)
 
-    if (!name || name === "New Agent") {
+    if (!name || name === "New Chat") {
       console.log("[auto-rename] Skipping - generic name")
       return // Don't rename if we got a generic name
     }

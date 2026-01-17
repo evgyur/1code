@@ -1,10 +1,9 @@
 "use client"
 
-// import { agentsSettingsDialogActiveTabAtom } from "@/lib/atoms/agents-settings-dialog"
 import { atom } from "jotai"
-const agentsSettingsDialogActiveTabAtom = atom<string | null>(null)
-// import { SettingsTab } from "@/lib/atoms/settings-dialog"
-type SettingsTab = string
+import { type SettingsTab } from "../../../lib/atoms"
+
+const agentsSettingsDialogActiveTabAtom = atom<SettingsTab | null>(null)
 import { cn } from "../../../lib/utils"
 import { useAtom } from "jotai"
 import { X } from "lucide-react"
@@ -14,10 +13,12 @@ import { createPortal } from "react-dom"
 import {
   EyeOpenFilledIcon,
   ProfileIconFilled,
+  OriginalMCPIcon,
 } from "../../../components/ui/icons"
 import { AgentsAppearanceTab } from "./settings-tabs/agents-appearance-tab"
 import { AgentsProfileTab } from "./settings-tabs/agents-profile-tab"
-import { AgentsDebugTab } from "./settings-tabs/agents-debug-tab"
+import { AgentsMcpTab } from "../../../components/dialogs/settings-tabs/agents-mcp-tab"
+import { AgentsDebugTab } from "../../../components/dialogs/settings-tabs/agents-debug-tab"
 import { Bug } from "lucide-react"
 
 // Check if we're in development mode
@@ -40,6 +41,12 @@ const ALL_TABS = [
     label: "Appearance",
     icon: EyeOpenFilledIcon,
     description: "Theme settings",
+  },
+  {
+    id: "mcp" as SettingsTab,
+    label: "MCP Servers",
+    icon: OriginalMCPIcon,
+    description: "Model Context Protocol servers",
   },
   // Debug tab - only shown in development
   ...(isDevelopment
@@ -91,6 +98,13 @@ export function AgentsSettingsDialog({
   const [mounted, setMounted] = useState(false)
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null)
 
+  // Set default tab when dialog opens
+  useEffect(() => {
+    if (isOpen && !activeTab) {
+      setActiveTab(ALL_TABS[0].id)
+    }
+  }, [isOpen, activeTab, setActiveTab])
+
   // Handle keyboard navigation
   useEffect(() => {
     if (!isOpen) return
@@ -120,6 +134,8 @@ export function AgentsSettingsDialog({
         return <AgentsProfileTab />
       case "appearance":
         return <AgentsAppearanceTab />
+      case "mcp":
+        return <AgentsMcpTab />
       case "debug":
         return isDevelopment ? <AgentsDebugTab /> : null
       default:

@@ -119,7 +119,9 @@ export const AgentAskUserQuestionTool = memo(function AgentAskUserQuestionTool({
         {/* Header */}
         <div className="flex items-center gap-1.5 pl-2.5 pr-2 h-7 border-b border-border">
           <QuestionIcon className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Answers</span>
+          <span className="text-xs text-muted-foreground">
+            {entries.length === 1 ? "Answer" : "Answers"}
+          </span>
         </div>
         {/* Content */}
         <div className="flex flex-col gap-2 p-2.5 text-xs">

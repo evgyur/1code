@@ -4,11 +4,13 @@ import { toast } from "sonner"
 import {
   agentsLoginModalOpenAtom,
   extendedThinkingEnabledAtom,
+  sessionInfoAtom,
 } from "../../../lib/atoms"
 import { appStore } from "../../../lib/jotai-store"
 import { trpcClient } from "../../../lib/trpc"
 import {
   askUserQuestionResultsAtom,
+  compactingSubChatsAtom,
   lastSelectedModelIdAtom,
   MODEL_ID_MAP,
   pendingAuthRetryMessageAtom,
@@ -89,6 +91,7 @@ type IPCChatTransportConfig = {
   chatId: string
   subChatId: string
   cwd: string
+  projectPath?: string // Original project path for MCP config lookup (when using worktrees)
   mode: "plan" | "agent"
   model?: string
 }
@@ -138,36 +141,17 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const subId = this.config.subChatId.slice(-8)
     let chunkCount = 0
     let lastChunkType = ""
-    console.log(`[SD] R:START sub=${subId}`)
+    console.log(`[SD] R:START sub=${subId} cwd=${this.config.cwd} projectPath=${this.config.projectPath || "(not set)"}`)
 
     return new ReadableStream({
       start: (controller) => {
-        console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
-        console.error(`║ [RENDERER] CREATING CLAUDE SUBSCRIPTION                  ║`)
-        console.error(`╠═══════════════════════════════════════════════════════════╣`)
-        console.error(`║ SubChatId: ${this.config.subChatId.padEnd(47)}║`)
-        console.error(`║ ChatId: ${this.config.chatId.padEnd(51)}║`)
-        console.error(`║ CWD: ${this.config.cwd.padEnd(53)}║`)
-        console.error(`║ Mode: ${currentMode.padEnd(53)}║`)
-        console.error(`║ Prompt: "${prompt.substring(0, 45)}${prompt.length > 45 ? '...' : ''}"`.padEnd(59) + `║`)
-        console.error(`║ Prompt Length: ${String(prompt.length).padEnd(42)}║`)
-        console.error(`║ SessionId: ${(sessionId || 'none').padEnd(48)}║`)
-        console.error(`║ Images: ${String(images.length).padEnd(51)}║`)
-        console.error(`║ MaxThinkingTokens: ${String(maxThinkingTokens || 'none').padEnd(37)}║`)
-        console.error(`║ Model: ${(modelString || 'default').padEnd(50)}║`)
-        console.error(`╚═══════════════════════════════════════════════════════════╝\n`)
-        console.error(`⚠️  NOTE: Backend logs are in MAIN PROCESS console (View → Toggle Developer Tools → Main Process)`)
-        console.error(`\n`)
-        
-        let subscriptionCreated = false
-        let subscriptionError: Error | null = null
-        
         const sub = trpcClient.claude.chat.subscribe(
           {
             subChatId: this.config.subChatId,
             chatId: this.config.chatId,
             prompt,
             cwd: this.config.cwd,
+            projectPath: this.config.projectPath, // Original project path for MCP config lookup
             mode: currentMode,
             sessionId,
             ...(maxThinkingTokens && { maxThinkingTokens }),
@@ -176,36 +160,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
           },
           {
             onData: (chunk: UIMessageChunk) => {
-              if (!subscriptionCreated) {
-                subscriptionCreated = true
-                console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
-                console.error(`║ [RENDERER] FIRST CHUNK RECEIVED                          ║`)
-                console.error(`╠═══════════════════════════════════════════════════════════╣`)
-                console.error(`║ Type: ${String(chunk.type).padEnd(53)}║`)
-                console.error(`╚═══════════════════════════════════════════════════════════╝`)
-                console.error(`\nFULL CHUNK JSON:\n${JSON.stringify(chunk, null, 2)}\n`)
-                
-                if (chunk.type === "error") {
-                  const err = chunk as any
-                  console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
-                  console.error(`║ ⚠️  ERROR CHUNK RECEIVED - DETAILS BELOW                  ║`)
-                  console.error(`╠═══════════════════════════════════════════════════════════╣`)
-                  console.error(`║ Error Text: ${(err.errorText || 'MISSING').substring(0, 47).padEnd(47)}║`)
-                  console.error(`║ Category: ${String(err.debugInfo?.category || 'MISSING').padEnd(50)}║`)
-                  console.error(`║ Context: ${String(err.debugInfo?.context || 'MISSING').padEnd(51)}║`)
-                  console.error(`║ CWD: ${String(err.debugInfo?.cwd || 'MISSING').padEnd(54)}║`)
-                  console.error(`║ Mode: ${String(err.debugInfo?.mode || 'MISSING').padEnd(52)}║`)
-                  console.error(`╚═══════════════════════════════════════════════════════════╝`)
-                  console.error(`\nFULL ERROR TEXT: "${err.errorText || 'MISSING'}"`)
-                  console.error(`\nDEBUG INFO:\n${JSON.stringify(err.debugInfo, null, 2)}`)
-                  console.error(`\nERROR MESSAGE: ${err.debugInfo?.errorMessage || 'MISSING'}`)
-                  console.error(`\nERROR STACK:\n${err.debugInfo?.errorStack || 'MISSING'}\n`)
-                } else if (chunk.type === "finish") {
-                  console.error(`\n⚠️  WARNING: Stream completed with 'finish' but no Claude output!`)
-                  console.error(`This usually means the backend stream ended immediately.`)
-                  console.error(`Check MAIN PROCESS console for backend logs.\n`)
-                }
-              }
               chunkCount++
               lastChunkType = chunk.type
 
@@ -232,6 +186,38 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 const newResults = new Map(currentResults)
                 newResults.set(chunk.toolUseId, chunk.result)
                 appStore.set(askUserQuestionResultsAtom, newResults)
+              }
+
+              // Handle compacting status - track in atom for UI display
+              if (chunk.type === "system-Compact") {
+                const compacting = appStore.get(compactingSubChatsAtom)
+                const newCompacting = new Set(compacting)
+                if (chunk.state === "input-streaming") {
+                  // Compacting started
+                  newCompacting.add(this.config.subChatId)
+                } else {
+                  // Compacting finished (output-available)
+                  newCompacting.delete(this.config.subChatId)
+                }
+                appStore.set(compactingSubChatsAtom, newCompacting)
+              }
+
+              // Handle session init - store MCP servers, plugins, tools info
+              if (chunk.type === "session-init") {
+                console.log("[MCP] Received session-init:", {
+                  tools: chunk.tools?.length,
+                  mcpServers: chunk.mcpServers,
+                  plugins: chunk.plugins,
+                  skills: chunk.skills?.length,
+                  // Debug: show all tools to check for MCP tools (format: mcp__servername__toolname)
+                  allTools: chunk.tools,
+                })
+                appStore.set(sessionInfoAtom, {
+                  tools: chunk.tools,
+                  mcpServers: chunk.mcpServers,
+                  plugins: chunk.plugins,
+                  skills: chunk.skills,
+                })
               }
 
               // Clear pending questions ONLY when agent has moved on
@@ -273,25 +259,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
-                const err = chunk as any
-                console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
-                console.error(`║ ⚠️  ERROR CHUNK PROCESSED                                  ║`)
-                console.error(`╠═══════════════════════════════════════════════════════════╣`)
-                console.error(`║ Error Text: ${(err.errorText || 'MISSING').substring(0, 47).padEnd(47)}║`)
-                console.error(`║ Category: ${String(err.debugInfo?.category || 'MISSING').padEnd(50)}║`)
-                console.error(`║ Context: ${String(err.debugInfo?.context || 'MISSING').padEnd(51)}║`)
-                console.error(`║ CWD: ${String(err.debugInfo?.cwd || this.config.cwd).padEnd(54)}║`)
-                console.error(`║ Mode: ${String(err.debugInfo?.mode || 'MISSING').padEnd(52)}║`)
-                console.error(`╚═══════════════════════════════════════════════════════════╝`)
-                console.error(`\nFULL ERROR TEXT:\n"${err.errorText || 'MISSING'}"\n`)
-                console.error(`\nDEBUG INFO:\n${JSON.stringify(err.debugInfo, null, 2)}\n`)
-                console.error(`\nERROR MESSAGE FROM DEBUG:\n${err.debugInfo?.errorMessage || 'MISSING'}\n`)
-                console.error(`\nERROR STACK FROM DEBUG:\n${err.debugInfo?.errorStack || 'MISSING'}\n`)
-                console.error(`\nFULL CHUNK OBJECT:\n${JSON.stringify(chunk, null, 2)}\n`)
-                
                 // Track error in Sentry
+                const category = chunk.debugInfo?.category || "UNKNOWN"
                 Sentry.captureException(
-                  new Error(errorText),
+                  new Error(chunk.errorText || "Claude transport error"),
                   {
                     tags: {
                       errorCategory: category,
@@ -306,40 +277,35 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   },
                 )
 
-                // Show toast with full error message
+                // Show toast based on error category
                 const config = ERROR_TOAST_CONFIG[category]
-                const description = config 
-                  ? `${config.description}\n\n${errorText}`
-                  : errorText
 
-                toast.error(config?.title || "Claude Error", {
-                  description: description,
-                  duration: 15000,
-                  action: {
-                    label: "Copy Error",
-                    onClick: () => {
-                      const fullError = `Error: ${errorText}\nCategory: ${category}\nCWD: ${this.config.cwd}\nDebug: ${JSON.stringify(chunk.debugInfo, null, 2)}`
-                      navigator.clipboard.writeText(fullError)
-                      console.log("Error copied to clipboard:", fullError)
-                    },
-                  },
-                })
-                
-                // Don't close controller on error - let finish chunk close it
-                // This prevents the "stream already closed" error
+                if (config) {
+                  toast.error(config.title, {
+                    description: config.description,
+                    duration: 8000,
+                    action: config.action
+                      ? {
+                          label: config.action.label,
+                          onClick: config.action.onClick,
+                        }
+                      : undefined,
+                  })
+                } else {
+                  toast.error("Something went wrong", {
+                    description:
+                      chunk.errorText || "An unexpected error occurred",
+                    duration: 8000,
+                  })
+                }
               }
 
               // Try to enqueue, but don't crash if stream is already closed
               try {
                 controller.enqueue(chunk)
               } catch (e) {
-                // Stream is already closed - this is expected after an error
-                if (e instanceof TypeError && e.message.includes("closed")) {
-                  console.warn(`[SD] R:ENQUEUE_SKIP sub=${subId} type=${chunk.type} - stream already closed (expected after error)`)
-                  return
-                }
-                // Other errors should be logged
-                console.error(`[SD] R:ENQUEUE_ERR sub=${subId} type=${chunk.type} n=${chunkCount} err=${e}`)
+                // CRITICAL: Log when enqueue fails - this could explain missing chunks!
+                console.log(`[SD] R:ENQUEUE_ERR sub=${subId} type=${chunk.type} n=${chunkCount} err=${e}`)
               }
 
               if (chunk.type === "finish") {
@@ -352,12 +318,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               }
             },
             onError: (err: Error) => {
-              subscriptionError = err
-              console.error(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} subscriptionCreated=${subscriptionCreated}`)
-              console.error(`[SD] R:ERROR_MESSAGE sub=${subId}:`, err.message)
-              console.error(`[SD] R:ERROR_STACK sub=${subId}:`, err.stack)
-              console.error(`[SD] R:ERROR_FULL sub=${subId}:`, err)
-              
+              console.log(`[SD] R:ERROR sub=${subId} n=${chunkCount} last=${lastChunkType} err=${err.message}`)
               // Track transport errors in Sentry
               Sentry.captureException(err, {
                 tags: {
@@ -368,31 +329,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   cwd: this.config.cwd,
                   chatId: this.config.chatId,
                   subChatId: this.config.subChatId,
-                  chunkCount,
-                  lastChunkType,
-                  subscriptionCreated,
                 },
               })
 
-              // Show user-friendly error toast with full error details
-              const errorDetails = err.message || err.toString() || "Unknown error"
-              toast.error("Claude connection error", {
-                description: `${errorDetails}${subscriptionCreated ? "" : " (subscription never received data)"}`,
-                duration: 10000,
-                action: {
-                  label: "Copy error",
-                  onClick: () => {
-                    navigator.clipboard.writeText(`Error: ${errorDetails}\nStack: ${err.stack || "No stack"}`)
-                  },
-                },
-              })
-
-              // Only error the controller if it's not already closed
-              try {
-                controller.error(err)
-              } catch (e) {
-                console.error(`[SD] R:ERROR_CONTROLLER_ALREADY_CLOSED sub=${subId}`, e)
-              }
+              controller.error(err)
             },
             onComplete: () => {
               console.log(`[SD] R:COMPLETE sub=${subId} n=${chunkCount} last=${lastChunkType}`)

@@ -44,6 +44,26 @@ export type UIMessageChunk =
       toolCallId: string
       state: "input-streaming" | "output-available"
     }
+  // Session initialization (MCP servers, plugins, tools)
+  | {
+      type: "session-init"
+      tools: string[]
+      mcpServers: MCPServer[]
+      plugins: { name: string; path: string }[]
+      skills: string[]
+    }
+
+export type MCPServerStatus = "connected" | "failed" | "pending" | "needs-auth"
+
+export type MCPServer = {
+  name: string
+  status: MCPServerStatus
+  serverInfo?: {
+    name: string
+    version: string
+  }
+  error?: string
+}
 
 export type MessageMetadata = {
   sessionId?: string

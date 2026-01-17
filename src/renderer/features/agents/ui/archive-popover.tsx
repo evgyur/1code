@@ -92,7 +92,17 @@ export function ArchivePopover({ trigger }: ArchivePopoverProps) {
       )
   }, [archivedChats, searchQuery])
 
-  // Sync selected index with selected chat when popover opens or data changes
+  // Clear search query and sync selected index when popover opens
+  useEffect(() => {
+    if (open) {
+      setSearchQuery("")
+      setTimeout(() => {
+        searchInputRef.current?.focus()
+      }, 0)
+    }
+  }, [open, setSearchQuery])
+
+  // Sync selected index with filtered chats
   useEffect(() => {
     if (open && filteredChats.length > 0) {
       // Find index of currently selected chat, default to 0 if not found
@@ -100,9 +110,6 @@ export function ArchivePopover({ trigger }: ArchivePopoverProps) {
         (chat) => chat.id === selectedChatId,
       )
       setSelectedIndex(currentIndex >= 0 ? currentIndex : 0)
-      setTimeout(() => {
-        searchInputRef.current?.focus()
-      }, 0)
     }
   }, [open, filteredChats, selectedChatId])
 
@@ -123,6 +130,8 @@ export function ArchivePopover({ trigger }: ArchivePopoverProps) {
       const chat = filteredChats[selectedIndex]
       if (chat) {
         restoreMutation.mutate({ id: chat.id })
+        setSelectedChatId(chat.id)
+        setOpen(false)
       }
     }
   }

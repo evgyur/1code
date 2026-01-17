@@ -66,6 +66,7 @@ const GENERAL_SHORTCUTS: Shortcut[] = [
   { label: "Show shortcuts", keys: ["?"] },
   { label: "Settings", keys: ["cmd", ","] },
   { label: "Toggle sidebar", keys: ["cmd", "\\"] },
+  { label: "Undo archive", keys: ["cmd", "Z"] },
 ]
 
 // Dynamic shortcuts based on ctrlTabTarget preference

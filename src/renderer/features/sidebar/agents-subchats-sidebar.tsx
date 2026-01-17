@@ -11,9 +11,12 @@ import {
   loadingSubChatsAtom,
   agentsSubChatUnseenChangesAtom,
   selectedAgentChatIdAtom,
+  previousAgentChatIdAtom,
   subChatFilesAtom,
   justCreatedIdsAtom,
   pendingUserQuestionsAtom,
+  undoStackAtom,
+  type UndoItem,
 } from "../agents/atoms"
 import {
   selectedTeamIdAtom,
@@ -26,16 +29,18 @@ import {
   isDesktopAtom,
   isFullscreenAtom,
 } from "../../lib/atoms"
-import { useArchiveChat } from "./hooks/use-archive-chat"
+import { trpc } from "../../lib/trpc"
 import {
   useAgentSubChatStore,
   type SubChatMeta,
 } from "../agents/stores/sub-chat-store"
+import { useShallow } from "zustand/react/shallow"
 import {
   PlusIcon,
   ArchiveIcon,
   IconDoubleChevronLeft,
   IconSpinner,
+  LoadingDot,
   PlanIcon,
   AgentIcon,
   IconOpenSidebar,
@@ -99,30 +104,72 @@ export function AgentsSubChatsSidebar({
   isLoading = false,
   agentName,
 }: AgentsSubChatsSidebarProps) {
-  const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
-  const openSubChatIds = useAgentSubChatStore((state) => state.openSubChatIds)
-  const pinnedSubChatIds = useAgentSubChatStore(
-    (state) => state.pinnedSubChatIds,
-  )
-  const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
-  const parentChatId = useAgentSubChatStore((state) => state.chatId)
-  const togglePinSubChat = useAgentSubChatStore(
-    (state) => state.togglePinSubChat,
+  // Use shallow comparison to prevent re-renders when arrays have same content
+  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+    useShallow((state) => ({
+      activeSubChatId: state.activeSubChatId,
+      openSubChatIds: state.openSubChatIds,
+      pinnedSubChatIds: state.pinnedSubChatIds,
+      allSubChats: state.allSubChats,
+      parentChatId: state.chatId,
+      togglePinSubChat: state.togglePinSubChat,
+    }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const subChatFiles = useAtomValue(subChatFilesAtom)
   const selectedTeamId = useAtomValue(selectedTeamIdAtom)
-  const selectedChatId = useAtomValue(selectedAgentChatIdAtom)
+  const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const previousChatId = useAtomValue(previousAgentChatIdAtom)
+
+  // Fetch agent chats for navigation after archive
+  const { data: agentChats } = api.agents.getAgentChats.useQuery(
+    { teamId: selectedTeamId! },
+    { enabled: !!selectedTeamId },
+  )
+
+  const utils = trpc.useUtils()
 
   // Archive parent chat mutation
-  const archiveChatMutation = useArchiveChat({
-    teamId: selectedTeamId,
-    selectedChatId,
+  const archiveChatMutation = trpc.chats.archive.useMutation({
+    onSuccess: (_, variables) => {
+      utils.chats.list.invalidate()
+      utils.chats.listArchived.invalidate()
+
+      // Navigate to previous chat or new workspace
+      if (selectedChatId === variables.id) {
+        const isPreviousAvailable = previousChatId &&
+          agentChats?.some((c) => c.id === previousChatId)
+
+        if (isPreviousAvailable) {
+          setSelectedChatId(previousChatId)
+        } else {
+          setSelectedChatId(null)
+        }
+      }
+    },
   })
   const subChatUnseenChanges = useAtomValue(agentsSubChatUnseenChangesAtom)
   const setSubChatUnseenChanges = useSetAtom(agentsSubChatUnseenChangesAtom)
   const [justCreatedIds, setJustCreatedIds] = useAtom(justCreatedIdsAtom)
   const pendingQuestions = useAtomValue(pendingUserQuestionsAtom)
+
+  // Pending plan approvals from DB - only for open sub-chats
+  const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
+    { openSubChatIds },
+    { refetchInterval: 5000, enabled: openSubChatIds.length > 0, placeholderData: (prev) => prev }
+  )
+  const pendingPlanApprovals = useMemo(() => {
+    const set = new Set<string>()
+    if (pendingPlanApprovalsData) {
+      for (const { subChatId } of pendingPlanApprovalsData) {
+        set.add(subChatId)
+      }
+    }
+    return set
+  }, [pendingPlanApprovalsData])
+
+  // Unified undo stack for Cmd+Z support
+  const setUndoStack = useSetAtom(undoStackAtom)
   const [searchQuery, setSearchQuery] = useState("")
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
   const [focusedChatIndex, setFocusedChatIndex] = useState<number>(-1)
@@ -329,14 +376,30 @@ export function AgentsSubChatsSidebar({
       }
       // Archive = remove from open tabs (but keep in allSubChats for history)
       useAgentSubChatStore.getState().removeFromOpenSubChats(subChatId)
+
+      // Add to unified undo stack for Cmd+Z
+      if (parentChatId) {
+        const timeoutId = setTimeout(() => {
+          setUndoStack((prev) => prev.filter(
+            (item) => !(item.type === "subchat" && item.subChatId === subChatId)
+          ))
+        }, 10000)
+
+        setUndoStack((prev) => [...prev, {
+          type: "subchat",
+          subChatId,
+          chatId: parentChatId,
+          timeoutId,
+        }])
+      }
     },
-    [openSubChats.length, allSubChats],
+    [openSubChats.length, allSubChats, parentChatId, setUndoStack],
   )
 
   const handleConfirmArchiveAgent = useCallback(() => {
     if (parentChatId) {
       // Archive the parent agent chat
-      archiveChatMutation.mutate({ chatId: parentChatId })
+      archiveChatMutation.mutate({ id: parentChatId })
     }
     setArchiveAgentDialogOpen(false)
     setSubChatToArchive(null)
@@ -394,8 +457,21 @@ export function AgentsSubChatsSidebar({
         .map((c) => c.id)
 
       idsToClose.forEach((id) => state.removeFromOpenSubChats(id))
+
+      // Add each to unified undo stack for Cmd+Z
+      if (parentChatId) {
+        const newItems: UndoItem[] = idsToClose.map((id) => {
+          const timeoutId = setTimeout(() => {
+            setUndoStack((prev) => prev.filter(
+              (item) => !(item.type === "subchat" && item.subChatId === id)
+            ))
+          }, 10000)
+          return { type: "subchat" as const, subChatId: id, chatId: parentChatId, timeoutId }
+        })
+        setUndoStack((prev) => [...prev, ...newItems])
+      }
     },
-    [filteredSubChats],
+    [filteredSubChats, parentChatId, setUndoStack],
   )
 
   const onCloseOtherChats = useCallback((subChatId: string) => {
@@ -403,7 +479,20 @@ export function AgentsSubChatsSidebar({
     const idsToClose = state.openSubChatIds.filter((id) => id !== subChatId)
     idsToClose.forEach((id) => state.removeFromOpenSubChats(id))
     state.setActiveSubChat(subChatId)
-  }, [])
+
+    // Add each to unified undo stack for Cmd+Z
+    if (parentChatId) {
+      const newItems: UndoItem[] = idsToClose.map((id) => {
+        const timeoutId = setTimeout(() => {
+          setUndoStack((prev) => prev.filter(
+            (item) => !(item.type === "subchat" && item.subChatId === id)
+          ))
+        }, 10000)
+        return { type: "subchat" as const, subChatId: id, chatId: parentChatId, timeoutId }
+      })
+      setUndoStack((prev) => [...prev, ...newItems])
+    }
+  }, [parentChatId, setUndoStack])
 
   const renameMutation = api.agents.renameSubChat.useMutation({
     // Note: store is updated optimistically in handleRenameSave, no need for onSuccess
@@ -452,7 +541,7 @@ export function AgentsSubChatsSidebar({
         // Rollback on error
         useAgentSubChatStore
           .getState()
-          .updateSubChatName(subChatId, oldName || "New Agent")
+          .updateSubChatName(subChatId, oldName || "New Chat")
       } finally {
         setRenameLoading(false)
         setRenamingSubChat(null)
@@ -469,7 +558,7 @@ export function AgentsSubChatsSidebar({
     // Create sub-chat in DB first to get the real ID
     const newSubChat = await trpcClient.chats.createSubChat.mutate({
       chatId: parentChatId,
-      name: "New Agent",
+      name: "New Chat",
       mode: "agent",
     })
     const newId = newSubChat.id
@@ -480,7 +569,7 @@ export function AgentsSubChatsSidebar({
     // Add to allSubChats with placeholder name
     store.addToAllSubChats({
       id: newId,
-      name: "New Agent",
+      name: "New Chat",
       created_at: new Date().toISOString(),
       mode: "agent",
     })
@@ -604,9 +693,22 @@ export function AgentsSubChatsSidebar({
         const state = useAgentSubChatStore.getState()
         idsToArchive.forEach((id) => state.removeFromOpenSubChats(id))
         clearSubChatSelection()
+
+        // Add each to unified undo stack for Cmd+Z
+        if (parentChatId) {
+          const newItems: UndoItem[] = idsToArchive.map((id) => {
+            const timeoutId = setTimeout(() => {
+              setUndoStack((prev) => prev.filter(
+                (item) => !(item.type === "subchat" && item.subChatId === id)
+              ))
+            }, 10000)
+            return { type: "subchat" as const, subChatId: id, chatId: parentChatId, timeoutId }
+          })
+          setUndoStack((prev) => [...prev, ...newItems])
+        }
       }
     }
-  }, [selectedSubChatIds, openSubChatIds, allSubChats, clearSubChatSelection])
+  }, [selectedSubChatIds, openSubChatIds, allSubChats, clearSubChatSelection, parentChatId, setUndoStack])
 
   // Handle checkbox click
   const handleCheckboxClick = (e: React.MouseEvent, subChatId: string) => {
@@ -762,7 +864,7 @@ export function AgentsSubChatsSidebar({
         placeholder="Search chats..."
         emptyMessage="No results"
         getItemValue={(subChat) =>
-          `${subChat.name || "New Agent"} ${subChat.id}`
+          `${subChat.name || "New Chat"} ${subChat.id}`
         }
         renderItem={(subChat) => {
           const timeAgo = formatTimeAgo(
@@ -793,7 +895,7 @@ export function AgentsSubChatsSidebar({
                 )}
               </div>
               <span className="text-sm truncate flex-1">
-                {subChat.name || "New Agent"}
+                {subChat.name || "New Chat"}
               </span>
               <span className="text-sm text-muted-foreground whitespace-nowrap">
                 {timeAgo}
@@ -992,7 +1094,7 @@ export function AgentsSubChatsSidebar({
         {/* Loading state - centered spinner */}
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
-            <IconSpinner className="w-5 h-5 text-muted-foreground" />
+            <IconSpinner className="w-4 h-4 text-muted-foreground" />
           </div>
         ) : (
           <>
@@ -1028,7 +1130,7 @@ export function AgentsSubChatsSidebar({
                         )}
                       >
                         <h3 className="text-xs font-medium text-muted-foreground whitespace-nowrap">
-                          Pinned
+                          Pinned Chats
                         </h3>
                       </div>
                       <div className="list-none p-0 m-0 mb-3">
@@ -1052,6 +1154,7 @@ export function AgentsSubChatsSidebar({
                           const isChecked = selectedSubChatIds.has(subChat.id)
                           const draftText = getDraftText(subChat.id)
                           const hasPendingQuestion = pendingQuestions?.subChatId === subChat.id
+                          const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
                           const fileChanges = subChatFiles.get(subChat.id) || []
                           const stats =
                             fileChanges.length > 0
@@ -1092,7 +1195,7 @@ export function AgentsSubChatsSidebar({
                                     setHoveredChatIndex(globalIndex)
                                     handleSubChatMouseEnter(
                                       subChat.id,
-                                      subChat.name || "New Agent",
+                                      subChat.name || "New Chat",
                                       e.currentTarget,
                                     )
                                   }}
@@ -1153,7 +1256,7 @@ export function AgentsSubChatsSidebar({
                                         )}
                                       </div>
                                       {/* Badge in bottom-right corner - hidden in multi-select mode and when pending question */}
-                                      {(isSubChatLoading || hasUnseen) &&
+                                      {(isSubChatLoading || hasUnseen || hasPendingPlan) &&
                                         !isMultiSelectMode && !hasPendingQuestion && (
                                           <div
                                             className={cn(
@@ -1163,10 +1266,13 @@ export function AgentsSubChatsSidebar({
                                                 : "bg-[#F4F4F4] group-hover:bg-[#E8E8E8] dark:bg-[#101010] dark:group-hover:bg-[#1B1B1B]",
                                             )}
                                           >
+                                            {/* Priority: loader > amber dot (pending plan) > blue dot (unseen) */}
                                             {isSubChatLoading ? (
-                                              <IconSpinner className="w-2.5 h-2.5 text-muted-foreground" />
+                                              <LoadingDot isLoading={true} className="w-2.5 h-2.5 text-muted-foreground" />
+                                            ) : hasPendingPlan ? (
+                                              <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                                             ) : (
-                                              <div className="w-2 h-2 rounded-full bg-[#307BD0]" />
+                                              <LoadingDot isLoading={false} className="w-2.5 h-2.5 text-muted-foreground" />
                                             )}
                                           </div>
                                         )}
@@ -1185,7 +1291,7 @@ export function AgentsSubChatsSidebar({
                                         >
                                           <TypewriterText
                                             text={subChat.name || ""}
-                                            placeholder="New Agent"
+                                            placeholder="New Chat"
                                             id={subChat.id}
                                             isJustCreated={justCreatedIds.has(subChat.id)}
                                             showPlaceholder={true}
@@ -1301,7 +1407,7 @@ export function AgentsSubChatsSidebar({
                         )}
                       >
                         <h3 className="text-xs font-medium text-muted-foreground whitespace-nowrap">
-                          {pinnedChats.length > 0 ? "Recent" : "Chats"}
+                          {pinnedChats.length > 0 ? "Recent chats" : "Chats"}
                         </h3>
                       </div>
                       <div className="list-none p-0 m-0">
@@ -1325,6 +1431,7 @@ export function AgentsSubChatsSidebar({
                           const isChecked = selectedSubChatIds.has(subChat.id)
                           const draftText = getDraftText(subChat.id)
                           const hasPendingQuestion = pendingQuestions?.subChatId === subChat.id
+                          const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
                           const fileChanges = subChatFiles.get(subChat.id) || []
                           const stats =
                             fileChanges.length > 0
@@ -1365,7 +1472,7 @@ export function AgentsSubChatsSidebar({
                                     setHoveredChatIndex(globalIndex)
                                     handleSubChatMouseEnter(
                                       subChat.id,
-                                      subChat.name || "New Agent",
+                                      subChat.name || "New Chat",
                                       e.currentTarget,
                                     )
                                   }}
@@ -1426,7 +1533,7 @@ export function AgentsSubChatsSidebar({
                                         )}
                                       </div>
                                       {/* Badge - hidden in multi-select mode and when pending question */}
-                                      {(isSubChatLoading || hasUnseen) &&
+                                      {(isSubChatLoading || hasUnseen || hasPendingPlan) &&
                                         !isMultiSelectMode && !hasPendingQuestion && (
                                           <div
                                             className={cn(
@@ -1436,10 +1543,13 @@ export function AgentsSubChatsSidebar({
                                                 : "bg-[#F4F4F4] group-hover:bg-[#E8E8E8] dark:bg-[#101010] dark:group-hover:bg-[#1B1B1B]",
                                             )}
                                           >
+                                            {/* Priority: loader > amber dot (pending plan) > blue dot (unseen) */}
                                             {isSubChatLoading ? (
-                                              <IconSpinner className="w-2.5 h-2.5 text-muted-foreground" />
+                                              <LoadingDot isLoading={true} className="w-2.5 h-2.5 text-muted-foreground" />
+                                            ) : hasPendingPlan ? (
+                                              <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                                             ) : (
-                                              <div className="w-2 h-2 rounded-full bg-[#307BD0]" />
+                                              <LoadingDot isLoading={false} className="w-2.5 h-2.5 text-muted-foreground" />
                                             )}
                                           </div>
                                         )}
@@ -1458,7 +1568,7 @@ export function AgentsSubChatsSidebar({
                                         >
                                           <TypewriterText
                                             text={subChat.name || ""}
-                                            placeholder="New Agent"
+                                            placeholder="New Chat"
                                             id={subChat.id}
                                             isJustCreated={justCreatedIds.has(subChat.id)}
                                             showPlaceholder={true}

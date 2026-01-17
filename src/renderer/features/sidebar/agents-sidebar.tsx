@@ -67,7 +67,7 @@ import {
   PublisherStudioIcon,
   SearchIcon,
   GitHubLogo,
-  IconSpinner,
+  LoadingDot,
   ArchiveIcon,
   TrashIcon,
   QuestionCircleIcon,
@@ -79,6 +79,7 @@ import { Input } from "../../components/ui/input"
 import { Button } from "../../components/ui/button"
 import {
   selectedAgentChatIdAtom,
+  previousAgentChatIdAtom,
   selectedDraftIdAtom,
   loadingSubChatsAtom,
   agentsUnseenChangesAtom,
@@ -86,7 +87,10 @@ import {
   agentsDebugModeAtom,
   selectedProjectAtom,
   justCreatedIdsAtom,
+  undoStackAtom,
+  type UndoItem,
 } from "../agents/atoms"
+import { useAgentSubChatStore, OPEN_SUB_CHATS_CHANGE_EVENT } from "../agents/stores/sub-chat-store"
 import { AgentsHelpPopover } from "../agents/components/agents-help-popover"
 import { getShortcutKey, isDesktopApp } from "../../lib/utils/platform"
 import { pluralize } from "../agents/utils/pluralize"
@@ -109,6 +113,7 @@ const ChatIcon = React.memo(function ChatIcon({
   isSelected,
   isLoading,
   hasUnseenChanges = false,
+  hasPendingPlan = false,
   isMultiSelectMode = false,
   isChecked = false,
   onCheckboxClick,
@@ -118,6 +123,7 @@ const ChatIcon = React.memo(function ChatIcon({
   isSelected: boolean
   isLoading: boolean
   hasUnseenChanges?: boolean
+  hasPendingPlan?: boolean
   isMultiSelectMode?: boolean
   isChecked?: boolean
   onCheckboxClick?: (e: React.MouseEvent) => void
@@ -174,22 +180,23 @@ const ChatIcon = React.memo(function ChatIcon({
       >
         {renderMainIcon()}
       </div>
-      {/* Badge in bottom-right corner: loader or unseen dot - hidden during multi-select */}
-      {(isLoading || hasUnseenChanges) && !isMultiSelectMode && (
+      {/* Badge in bottom-right corner: loader → amber dot → blue dot - hidden during multi-select */}
+      {(isLoading || hasUnseenChanges || hasPendingPlan) && !isMultiSelectMode && (
         <div
           className={cn(
             "absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center",
-            // Светлая тема: выбран/ховер #E8E8E8
-            // Темная тема: дефолт #101010, выбран/ховер #1B1B1B
             isSelected
               ? "bg-[#E8E8E8] dark:bg-[#1B1B1B]"
               : "bg-[#F4F4F4] group-hover:bg-[#E8E8E8] dark:bg-[#101010] dark:group-hover:bg-[#1B1B1B]",
           )}
         >
+          {/* Priority: loader > amber dot (pending plan) > blue dot (unseen) */}
           {isLoading ? (
-            <IconSpinner className="w-2.5 h-2.5 text-muted-foreground" />
+            <LoadingDot isLoading={true} className="w-2.5 h-2.5 text-muted-foreground" />
+          ) : hasPendingPlan ? (
+            <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
           ) : (
-            <div className="w-2 h-2 rounded-full bg-[#307BD0]" />
+            <LoadingDot isLoading={false} className="w-2.5 h-2.5 text-muted-foreground" />
           )}
         </div>
       )}
@@ -221,6 +228,7 @@ export function AgentsSidebar({
   onChatSelect,
 }: AgentsSidebarProps) {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const previousChatId = useAtomValue(previousAgentChatIdAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const [isSidebarHovered, setIsSidebarHovered] = useState(false)
@@ -255,6 +263,7 @@ export function AgentsSidebar({
   const unseenChanges = useAtomValue(agentsUnseenChangesAtom)
   const archivePopoverOpen = useAtomValue(archivePopoverOpenAtom)
   const justCreatedIds = useAtomValue(justCreatedIdsAtom)
+
   const [helpPopoverOpen, setHelpPopoverOpen] = useAtom(
     agentsHelpPopoverOpenAtom,
   )
@@ -310,6 +319,61 @@ export function AgentsSidebar({
   // Fetch all chats (no project filter)
   const { data: agentChats } = trpc.chats.list.useQuery({})
 
+  // Track open sub-chat changes for reactivity
+  const [openSubChatsVersion, setOpenSubChatsVersion] = useState(0)
+  useEffect(() => {
+    const handleChange = () => setOpenSubChatsVersion((v) => v + 1)
+    window.addEventListener(OPEN_SUB_CHATS_CHANGE_EVENT, handleChange)
+    return () => window.removeEventListener(OPEN_SUB_CHATS_CHANGE_EVENT, handleChange)
+  }, [])
+
+  // Store previous value to avoid unnecessary React Query refetches
+  const prevOpenSubChatIdsRef = useRef<string[]>([])
+
+  // Collect all open sub-chat IDs from localStorage for all workspaces
+  const allOpenSubChatIds = useMemo(() => {
+    // openSubChatsVersion is used to trigger recalculation when sub-chats change
+    void openSubChatsVersion
+    if (!agentChats) return prevOpenSubChatIdsRef.current
+
+    const allIds: string[] = []
+    for (const chat of agentChats) {
+      try {
+        const stored = localStorage.getItem(`agent-open-sub-chats-${chat.id}`)
+        if (stored) {
+          const ids = JSON.parse(stored) as string[]
+          allIds.push(...ids)
+        }
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+
+    // Compare with previous - if content is same, return old reference
+    // This prevents React Query from refetching when array content hasn't changed
+    const prev = prevOpenSubChatIdsRef.current
+    const sorted = [...allIds].sort()
+    const prevSorted = [...prev].sort()
+    if (sorted.length === prevSorted.length && sorted.every((id, i) => id === prevSorted[i])) {
+      return prev
+    }
+
+    prevOpenSubChatIdsRef.current = allIds
+    return allIds
+  }, [agentChats, openSubChatsVersion])
+
+  // File changes stats from DB - only for open sub-chats
+  const { data: fileStatsData } = trpc.chats.getFileStats.useQuery(
+    { openSubChatIds: allOpenSubChatIds },
+    { refetchInterval: 5000, enabled: allOpenSubChatIds.length > 0, placeholderData: (prev) => prev }
+  )
+
+  // Pending plan approvals from DB - only for open sub-chats
+  const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
+    { openSubChatIds: allOpenSubChatIds },
+    { refetchInterval: 5000, enabled: allOpenSubChatIds.length > 0, placeholderData: (prev) => prev }
+  )
+
   // Fetch all projects for git info
   const { data: projects } = trpc.projects.list.useQuery()
 
@@ -353,23 +417,108 @@ export function AgentsSidebar({
     prevArchivePopoverOpen.current = archivePopoverOpen
   }, [archivePopoverOpen])
 
-  // Archive chat mutation
-  const archiveChatMutation = trpc.chats.archive.useMutation({
-    onSuccess: () => {
+  // Unified undo stack for workspaces and sub-chats (Jotai atom)
+  const [undoStack, setUndoStack] = useAtom(undoStackAtom)
+
+  // Restore chat mutation (for undo)
+  const restoreChatMutation = trpc.chats.restore.useMutation({
+    onSuccess: (_, variables) => {
       utils.chats.list.invalidate()
       utils.chats.listArchived.invalidate()
-      // If archiving the currently selected chat, clear selection
-      if (selectedChatId) {
-        setSelectedChatId(null)
-      }
+      // Select the restored chat
+      setSelectedChatId(variables.id)
     },
   })
 
-  // Batch archive mutation
-  const archiveChatsBatchMutation = trpc.chats.archiveBatch.useMutation({
-    onSuccess: () => {
+  // Remove workspace item from stack by chatId
+  const removeWorkspaceFromStack = useCallback((chatId: string) => {
+    setUndoStack((prev) => {
+      const index = prev.findIndex((item) => item.type === "workspace" && item.chatId === chatId)
+      if (index !== -1) {
+        clearTimeout(prev[index].timeoutId)
+        return [...prev.slice(0, index), ...prev.slice(index + 1)]
+      }
+      return prev
+    })
+  }, [setUndoStack])
+
+  // Archive chat mutation
+  const archiveChatMutation = trpc.chats.archive.useMutation({
+    onSuccess: (_, variables) => {
       utils.chats.list.invalidate()
       utils.chats.listArchived.invalidate()
+
+      // If archiving the currently selected chat, navigate to previous or new workspace
+      if (selectedChatId === variables.id) {
+        // Check if previous chat is available (exists and not being archived)
+        const isPreviousAvailable = previousChatId &&
+          agentChats?.some((c) => c.id === previousChatId && c.id !== variables.id)
+
+        if (isPreviousAvailable) {
+          setSelectedChatId(previousChatId)
+        } else {
+          // Fallback to new workspace view
+          setSelectedChatId(null)
+        }
+      }
+
+      // Clear after 10 seconds (Cmd+Z window)
+      const timeoutId = setTimeout(() => {
+        removeWorkspaceFromStack(variables.id)
+      }, 10000)
+
+      // Add to unified undo stack for Cmd+Z
+      setUndoStack((prev) => [...prev, {
+        type: "workspace",
+        chatId: variables.id,
+        timeoutId,
+      }])
+    },
+  })
+
+  // Cmd+Z to undo archive (supports multiple undos for workspaces AND sub-chats)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && undoStack.length > 0) {
+        e.preventDefault()
+        // Get the most recent item
+        const lastItem = undoStack[undoStack.length - 1]
+        if (!lastItem) return
+
+        // Clear timeout and remove from stack
+        clearTimeout(lastItem.timeoutId)
+        setUndoStack((prev) => prev.slice(0, -1))
+
+        if (lastItem.type === "workspace") {
+          // Restore workspace from archive
+          restoreChatMutation.mutate({ id: lastItem.chatId })
+        } else if (lastItem.type === "subchat") {
+          // Restore sub-chat tab (re-add to open tabs)
+          const store = useAgentSubChatStore.getState()
+          store.addToOpenSubChats(lastItem.subChatId)
+          store.setActiveSubChat(lastItem.subChatId)
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [undoStack, setUndoStack, restoreChatMutation])
+
+  // Batch archive mutation
+  const archiveChatsBatchMutation = trpc.chats.archiveBatch.useMutation({
+    onSuccess: (_, variables) => {
+      utils.chats.list.invalidate()
+      utils.chats.listArchived.invalidate()
+
+      // Add each chat to unified undo stack for Cmd+Z
+      const newItems: UndoItem[] = variables.chatIds.map((chatId) => {
+        const timeoutId = setTimeout(() => {
+          removeWorkspaceFromStack(chatId)
+        }, 10000)
+        return { type: "workspace" as const, chatId, timeoutId }
+      })
+      setUndoStack((prev) => [...prev, ...newItems])
     },
   })
 
@@ -506,32 +655,6 @@ export function AgentsSidebar({
     }
   }
 
-  // Handle bulk archive of selected chats
-  const handleBulkArchive = () => {
-    const chatIdsToArchive = Array.from(selectedChatIds)
-    if (chatIdsToArchive.length > 0) {
-      // If active chat is being archived, select the next available chat
-      const isArchivingActivChat =
-        selectedChatId && chatIdsToArchive.includes(selectedChatId)
-
-      archiveChatsBatchMutation.mutate(
-        { chatIds: chatIdsToArchive },
-        {
-          onSuccess: () => {
-            if (isArchivingActivChat) {
-              // Find first chat that's not being archived
-              const nextChat = filteredChats.find(
-                (chat) => !chatIdsToArchive.includes(chat.id),
-              )
-              setSelectedChatId(nextChat?.id || null)
-            }
-            clearChatSelection()
-          },
-        },
-      )
-    }
-  }
-
   // Check if all selected chats are pinned
   const areAllSelectedPinned = useMemo(() => {
     if (selectedChatIds.size === 0) return false
@@ -597,6 +720,47 @@ export function AgentsSidebar({
     }
   }, [searchQuery, agentChats, pinnedChatIds])
 
+  // Handle bulk archive of selected chats
+  const handleBulkArchive = useCallback(() => {
+    const chatIdsToArchive = Array.from(selectedChatIds)
+    if (chatIdsToArchive.length === 0) return
+
+    // If active chat is being archived, navigate to previous or new workspace
+    const isArchivingActiveChat =
+      selectedChatId && chatIdsToArchive.includes(selectedChatId)
+
+    archiveChatsBatchMutation.mutate(
+      { chatIds: chatIdsToArchive },
+      {
+        onSuccess: () => {
+          if (isArchivingActiveChat) {
+            // Check if previous chat is available (exists and not being archived)
+            const remainingChats = filteredChats.filter(
+              (c) => !chatIdsToArchive.includes(c.id)
+            )
+            const isPreviousAvailable = previousChatId &&
+              remainingChats.some((c) => c.id === previousChatId)
+
+            if (isPreviousAvailable) {
+              setSelectedChatId(previousChatId)
+            } else {
+              setSelectedChatId(null)
+            }
+          }
+          clearChatSelection()
+        },
+      },
+    )
+  }, [
+    selectedChatIds,
+    selectedChatId,
+    previousChatId,
+    filteredChats,
+    archiveChatsBatchMutation,
+    setSelectedChatId,
+    clearChatSelection,
+  ])
+
   // Delete a draft from localStorage
   const handleDeleteDraft = useCallback(
     (draftId: string) => {
@@ -634,6 +798,33 @@ export function AgentsSidebar({
     () => new Set([...loadingSubChats.values()]),
     [loadingSubChats],
   )
+
+  // Convert file stats from DB to a Map for easy lookup
+  const workspaceFileStats = useMemo(() => {
+    const statsMap = new Map<string, { fileCount: number; additions: number; deletions: number }>()
+    if (fileStatsData) {
+      
+      for (const stat of fileStatsData) {
+        statsMap.set(stat.chatId, {
+          fileCount: stat.fileCount,
+          additions: stat.additions,
+          deletions: stat.deletions,
+        })
+      }
+    }
+    return statsMap
+  }, [fileStatsData])
+
+  // Aggregate pending plan approvals by workspace (chatId) from DB
+  const workspacePendingPlans = useMemo(() => {
+    const chatIdsWithPendingPlans = new Set<string>()
+    if (pendingPlanApprovalsData) {
+      for (const { chatId } of pendingPlanApprovalsData) {
+        chatIdsWithPendingPlans.add(chatId)
+      }
+    }
+    return chatIdsWithPendingPlans
+  }, [pendingPlanApprovalsData])
 
   const handleNewAgent = () => {
     triggerHaptic("light")
@@ -870,6 +1061,51 @@ export function AgentsSidebar({
     },
     [isMultiSelectMode, clearChatSelection],
   )
+
+  // Cmd+E to archive current workspace (desktop) or Opt+Cmd+E (web)
+  useEffect(() => {
+    const handleArchiveHotkey = (e: KeyboardEvent) => {
+      const isDesktop = isDesktopApp()
+
+      // Desktop: Cmd+E (without Alt)
+      const isDesktopShortcut =
+        isDesktop &&
+        e.metaKey &&
+        e.code === "KeyE" &&
+        !e.altKey &&
+        !e.shiftKey &&
+        !e.ctrlKey
+      // Web: Opt+Cmd+E (with Alt)
+      const isWebShortcut = e.altKey && e.metaKey && e.code === "KeyE"
+
+      if (isDesktopShortcut || isWebShortcut) {
+        e.preventDefault()
+
+        // If multi-select mode, bulk archive selected chats
+        if (isMultiSelectMode && selectedChatIds.size > 0) {
+          if (!archiveChatsBatchMutation.isPending) {
+            handleBulkArchive()
+          }
+          return
+        }
+
+        // Otherwise archive current chat
+        if (selectedChatId && !archiveChatMutation.isPending) {
+          archiveChatMutation.mutate({ id: selectedChatId })
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleArchiveHotkey)
+    return () => window.removeEventListener("keydown", handleArchiveHotkey)
+  }, [
+    selectedChatId,
+    archiveChatMutation,
+    isMultiSelectMode,
+    selectedChatIds,
+    archiveChatsBatchMutation,
+    handleBulkArchive,
+  ])
 
   // Clear selection when project changes
   useEffect(() => {
@@ -1427,7 +1663,7 @@ export function AgentsSidebar({
                     )}
                   >
                     <h3 className="text-xs font-medium text-muted-foreground whitespace-nowrap">
-                      Pinned
+                      Pinned workspaces
                     </h3>
                   </div>
                   <div className="list-none p-0 m-0 mb-3">
@@ -1452,6 +1688,8 @@ export function AgentsSidebar({
                         : repoName || "Local project"
 
                       const isChecked = selectedChatIds.has(chat.id)
+                      const stats = workspaceFileStats.get(chat.id)
+                      const hasPendingPlan = workspacePendingPlans.has(chat.id)
 
                       return (
                         <ContextMenu key={chat.id}>
@@ -1530,6 +1768,7 @@ export function AgentsSidebar({
                                     hasUnseenChanges={unseenChanges.has(
                                       chat.id,
                                     )}
+                                    hasPendingPlan={hasPendingPlan}
                                     isMultiSelectMode={isMultiSelectMode}
                                     isChecked={isChecked}
                                     onCheckboxClick={(e) =>
@@ -1581,16 +1820,28 @@ export function AgentsSidebar({
                                         </button>
                                       )}
                                   </div>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="text-[11px] text-muted-foreground/60 truncate">
+                                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60 min-w-0">
+                                    <span className="truncate flex-1 min-w-0">
                                       {displayText}
                                     </span>
-                                    <span className="text-[11px] text-muted-foreground/60 flex-shrink-0">
-                                      {formatTime(
-                                        chat.updatedAt?.toISOString() ??
-                                          new Date().toISOString(),
+                                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                                      {stats && (stats.additions > 0 || stats.deletions > 0) && (
+                                        <>
+                                          <span className="text-green-600 dark:text-green-400">
+                                            +{stats.additions}
+                                          </span>
+                                          <span className="text-red-600 dark:text-red-400">
+                                            -{stats.deletions}
+                                          </span>
+                                        </>
                                       )}
-                                    </span>
+                                      <span>
+                                        {formatTime(
+                                          chat.updatedAt?.toISOString() ??
+                                            new Date().toISOString(),
+                                        )}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -1650,7 +1901,8 @@ export function AgentsSidebar({
                                     onClick={() => {
                                       navigator.clipboard.writeText(branch)
                                       toast.success(
-                                        "Branch name copied to clipboard",
+                                        "Branch name copied",
+                                        { description: branch },
                                       )
                                     }}
                                   >
@@ -1706,7 +1958,7 @@ export function AgentsSidebar({
                     )}
                   >
                     <h3 className="text-xs font-medium text-muted-foreground whitespace-nowrap">
-                      {pinnedAgents.length > 0 ? "Recent" : "Workspaces"}
+                      {pinnedAgents.length > 0 ? "Recent workspaces" : "Workspaces"}
                     </h3>
                   </div>
                   <div className="list-none p-0 m-0">
@@ -1731,6 +1983,8 @@ export function AgentsSidebar({
                         : repoName || "Local project"
 
                       const isChecked = selectedChatIds.has(chat.id)
+                      const stats = workspaceFileStats.get(chat.id)
+                      const hasPendingPlan = workspacePendingPlans.has(chat.id)
 
                       return (
                         <ContextMenu key={chat.id}>
@@ -1809,6 +2063,7 @@ export function AgentsSidebar({
                                     hasUnseenChanges={unseenChanges.has(
                                       chat.id,
                                     )}
+                                    hasPendingPlan={hasPendingPlan}
                                     isMultiSelectMode={isMultiSelectMode}
                                     isChecked={isChecked}
                                     onCheckboxClick={(e) =>
@@ -1862,17 +2117,29 @@ export function AgentsSidebar({
                                         </button>
                                       )}
                                   </div>
-                                  {/* Bottom line: Branch/Repository (left) and Time (right) */}
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="text-[11px] text-muted-foreground/60 truncate">
+                                  {/* Bottom line: Branch/Repository (left), Time, and Stats (right) */}
+                                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60 min-w-0">
+                                    <span className="truncate flex-1 min-w-0">
                                       {displayText}
                                     </span>
-                                    <span className="text-[11px] text-muted-foreground/60 flex-shrink-0">
-                                      {formatTime(
-                                        chat.updatedAt?.toISOString() ??
-                                          new Date().toISOString(),
+                                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                                      {stats && (stats.additions > 0 || stats.deletions > 0) && (
+                                        <>
+                                          <span className="text-green-600 dark:text-green-400">
+                                            +{stats.additions}
+                                          </span>
+                                          <span className="text-red-600 dark:text-red-400">
+                                            -{stats.deletions}
+                                          </span>
+                                        </>
                                       )}
-                                    </span>
+                                      <span>
+                                        {formatTime(
+                                          chat.updatedAt?.toISOString() ??
+                                            new Date().toISOString(),
+                                        )}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -1932,7 +2199,8 @@ export function AgentsSidebar({
                                     onClick={() => {
                                       navigator.clipboard.writeText(branch)
                                       toast.success(
-                                        "Branch name copied to clipboard",
+                                        "Branch name copied",
+                                        { description: branch },
                                       )
                                     }}
                                   >

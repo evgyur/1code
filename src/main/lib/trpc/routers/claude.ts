@@ -1,6 +1,6 @@
 import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
-import { app, safeStorage } from "electron"
+import { app, safeStorage, BrowserWindow } from "electron"
 import path from "path"
 import * as os from "os"
 import * as fs from "fs/promises"
@@ -18,8 +18,8 @@ import { publicProcedure, router } from "../index"
 import { buildAgentsOption } from "./agent-utils"
 
 /**
- * Parse @[agent:name] and @[skill:name] mentions from prompt text
- * Returns the cleaned prompt and lists of mentioned agents/skills
+ * Parse @[agent:name], @[skill:name], and @[tool:name] mentions from prompt text
+ * Returns the cleaned prompt and lists of mentioned agents/skills/tools
  */
 function parseMentions(prompt: string): {
   cleanedPrompt: string
@@ -27,14 +27,16 @@ function parseMentions(prompt: string): {
   skillMentions: string[]
   fileMentions: string[]
   folderMentions: string[]
+  toolMentions: string[]
 } {
   const agentMentions: string[] = []
   const skillMentions: string[] = []
   const fileMentions: string[] = []
   const folderMentions: string[] = []
+  const toolMentions: string[] = []
 
   // Match @[prefix:name] pattern
-  const mentionRegex = /@\[(file|folder|skill|agent):([^\]]+)\]/g
+  const mentionRegex = /@\[(file|folder|skill|agent|tool):([^\]]+)\]/g
   let match
 
   while ((match = mentionRegex.exec(prompt)) !== null) {
@@ -52,17 +54,34 @@ function parseMentions(prompt: string): {
       case "folder":
         folderMentions.push(name)
         break
+      case "tool":
+        // Validate tool name format: only alphanumeric, underscore, hyphen allowed
+        // This prevents prompt injection via malicious tool names
+        if (/^[a-zA-Z0-9_-]+$/.test(name)) {
+          toolMentions.push(name)
+        }
+        break
     }
   }
 
-  // Clean agent/skill mentions from prompt (they will be added as context)
+  // Clean agent/skill/tool mentions from prompt (they will be added as context or hints)
   // Keep file/folder mentions as they are useful context
-  const cleanedPrompt = prompt
+  let cleanedPrompt = prompt
     .replace(/@\[agent:[^\]]+\]/g, "")
     .replace(/@\[skill:[^\]]+\]/g, "")
+    .replace(/@\[tool:[^\]]+\]/g, "")
     .trim()
 
-  return { cleanedPrompt, agentMentions, skillMentions, fileMentions, folderMentions }
+  // Add tool usage hints if tools were mentioned
+  // Tool names are already validated to contain only safe characters
+  if (toolMentions.length > 0) {
+    const toolHints = toolMentions
+      .map((t) => `Use the ${t} tool for this request.`)
+      .join(" ")
+    cleanedPrompt = `${toolHints}\n\n${cleanedPrompt}`
+  }
+
+  return { cleanedPrompt, agentMentions, skillMentions, fileMentions, folderMentions, toolMentions }
 }
 
 /**
@@ -149,6 +168,7 @@ export const claudeRouter = router({
         chatId: z.string(),
         prompt: z.string(),
         cwd: z.string(),
+        projectPath: z.string().optional(), // Original project path for MCP config lookup
         mode: z.enum(["plan", "agent"]).default("agent"),
         sessionId: z.string().optional(),
         model: z.string().optional(),
@@ -487,6 +507,9 @@ export const claudeRouter = router({
               input.subChatId
             )
 
+            // MCP servers to pass to SDK (read from ~/.claude.json)
+            let mcpServersForSdk: Record<string, any> | undefined
+
             // Ensure isolated config dir exists and symlink skills/agents from ~/.claude/
             // This is needed because SDK looks for skills at $CLAUDE_CONFIG_DIR/skills/
             try {
@@ -521,6 +544,37 @@ export const claudeRouter = router({
               } catch (symlinkErr) {
                 // Ignore symlink errors (might already exist or permission issues)
               }
+
+              // Read MCP servers from ~/.claude.json for the original project path
+              // These will be passed directly to the SDK via options.mcpServers
+              const claudeJsonSource = path.join(os.homedir(), ".claude.json")
+              try {
+                const claudeJsonSourceExists = await fs.stat(claudeJsonSource).then(() => true).catch(() => false)
+
+                if (claudeJsonSourceExists) {
+                  // Read original config
+                  const originalConfig = JSON.parse(await fs.readFile(claudeJsonSource, "utf-8"))
+
+                  // Look for project-specific MCP config using original project path
+                  // Config structure: { "projects": { "/path/to/project": { "mcpServers": {...} } } }
+                  const lookupPath = input.projectPath || input.cwd
+                  const projectConfig = originalConfig.projects?.[lookupPath]
+
+                  // Debug logging
+                  console.log(`[claude] MCP config lookup: lookupPath=${lookupPath}, found=${!!projectConfig?.mcpServers}`)
+                  if (projectConfig?.mcpServers) {
+                    console.log(`[claude] MCP servers found: ${Object.keys(projectConfig.mcpServers).join(", ")}`)
+                    // Store MCP servers to pass to SDK
+                    mcpServersForSdk = projectConfig.mcpServers
+                  } else {
+                    // Log available project paths in config for debugging
+                    const projectPaths = Object.keys(originalConfig.projects || {}).filter(k => originalConfig.projects[k]?.mcpServers)
+                    console.log(`[claude] No MCP servers for ${lookupPath}. Config has MCP for: ${projectPaths.join(", ") || "(none)"}`)
+                  }
+                }
+              } catch (configErr) {
+                console.error(`[claude] Failed to read MCP config:`, configErr)
+              }
             } catch (mkdirErr) {
               console.error(`[claude] Failed to setup isolated config dir:`, mkdirErr)
             }
@@ -531,7 +585,7 @@ export const claudeRouter = router({
               ...(claudeCodeToken && {
                 CLAUDE_CODE_OAUTH_TOKEN: claudeCodeToken,
               }),
-              // Isolate Claude's config/session storage per subChat
+              // Re-enable CLAUDE_CONFIG_DIR now that we properly map MCP configs
               CLAUDE_CONFIG_DIR: isolatedConfigDir,
             }
 
@@ -568,6 +622,8 @@ export const claudeRouter = router({
             }
 
             const resumeSessionId = input.sessionId || existingSessionId || undefined
+            console.log(`[SD] Query options - cwd: ${input.cwd}, projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`)
+
             const queryOptions = {
               prompt,
               options: {
@@ -579,6 +635,8 @@ export const claudeRouter = router({
                 },
                 // Register mentioned agents with SDK via options.agents
                 ...(Object.keys(agentsOption).length > 0 && { agents: agentsOption }),
+                // Pass MCP servers from original project config directly to SDK
+                ...(mcpServersForSdk && { mcpServers: mcpServersForSdk }),
                 env: finalEnv,
                 permissionMode:
                   input.mode === "plan"
@@ -835,6 +893,18 @@ export const claudeRouter = router({
                   currentSessionId = msgAny.session_id // Share with cleanup
                 }
 
+                // Debug: Log system messages from SDK
+                if (msgAny.type === "system") {
+                  // Full log to see all fields including MCP errors
+                  console.log(`[SD] SYSTEM message: subtype=${msgAny.subtype}`, JSON.stringify({
+                    cwd: msgAny.cwd,
+                    mcp_servers: msgAny.mcp_servers,
+                    tools: msgAny.tools,
+                    plugins: msgAny.plugins,
+                    permissionMode: msgAny.permissionMode,
+                  }, null, 2))
+                }
+
                 // Transform and emit + accumulate
                 for (const chunk of transform(msg)) {
                   chunkCount++
@@ -885,6 +955,21 @@ export const claudeRouter = router({
                       if (toolPart) {
                         toolPart.result = chunk.output
                         toolPart.state = "result"
+
+                        // Notify renderer about file changes for Write/Edit tools
+                        if (toolPart.type === "tool-Write" || toolPart.type === "tool-Edit") {
+                          const filePath = toolPart.input?.file_path
+                          if (filePath) {
+                            const windows = BrowserWindow.getAllWindows()
+                            for (const win of windows) {
+                              win.webContents.send("file-changed", {
+                                filePath,
+                                type: toolPart.type,
+                                subChatId: input.subChatId
+                              })
+                            }
+                          }
+                        }
                       }
                       // Stop streaming after ExitPlanMode completes in plan mode
                       // Match by toolCallId since toolName is undefined in output chunks
@@ -901,6 +986,22 @@ export const claudeRouter = router({
                       break
                     case "message-metadata":
                       metadata = { ...metadata, ...chunk.messageMetadata }
+                      break
+                    case "system-Compact":
+                      // Add system-Compact to parts so it renders in the chat
+                      // Find existing part by toolCallId or add new one
+                      const existingCompact = parts.find(
+                        (p) => p.type === "system-Compact" && p.toolCallId === chunk.toolCallId
+                      )
+                      if (existingCompact) {
+                        existingCompact.state = chunk.state
+                      } else {
+                        parts.push({
+                          type: "system-Compact",
+                          toolCallId: chunk.toolCallId,
+                          state: chunk.state,
+                        })
+                      }
                       break
                   }
                   // Break from chunk loop if plan is done
@@ -1129,6 +1230,47 @@ export const claudeRouter = router({
             .run()
         }
       })
+    }),
+
+  /**
+   * Get MCP servers configuration for a project
+   * This allows showing MCP servers in UI before starting a chat session
+   */
+  getMcpConfig: publicProcedure
+    .input(z.object({ projectPath: z.string() }))
+    .query(async ({ input }) => {
+      const claudeJsonPath = path.join(os.homedir(), ".claude.json")
+
+      try {
+        const exists = await fs.stat(claudeJsonPath).then(() => true).catch(() => false)
+        if (!exists) {
+          return { mcpServers: [], projectPath: input.projectPath }
+        }
+
+        const configContent = await fs.readFile(claudeJsonPath, "utf-8")
+        const config = JSON.parse(configContent)
+
+        // Look for project-specific MCP config
+        const projectConfig = config.projects?.[input.projectPath]
+
+        if (!projectConfig?.mcpServers) {
+          return { mcpServers: [], projectPath: input.projectPath }
+        }
+
+        // Convert to array format with names
+        const mcpServers = Object.entries(projectConfig.mcpServers).map(([name, serverConfig]) => ({
+          name,
+          // Status will be "pending" until SDK actually connects
+          status: "pending" as const,
+          // Include config details for display (command, args, etc)
+          config: serverConfig as Record<string, unknown>,
+        }))
+
+        return { mcpServers, projectPath: input.projectPath }
+      } catch (error) {
+        console.error("[getMcpConfig] Error reading config:", error)
+        return { mcpServers: [], projectPath: input.projectPath, error: String(error) }
+      }
     }),
 
   /**

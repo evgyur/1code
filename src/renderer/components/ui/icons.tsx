@@ -1265,8 +1265,9 @@ export function IconChevronUp(props: IconProps) {
   )
 }
 
-export function IconSpinner(props: IconProps & { color?: string }) {
-  const { className, style, color, ...rest } = props
+export function IconSpinner(props: IconProps & { color?: string; size?: "default" | "nano" }) {
+  const { className, style, color, size = "default", ...rest } = props
+  const strokeWidth = size === "nano" ? 4 : 3
   return (
     <>
       <style>{`
@@ -1282,79 +1283,88 @@ export function IconSpinner(props: IconProps & { color?: string }) {
         fill="none"
         className={className}
         style={{
-          animation: "spin 0.6s linear infinite",
-          transformOrigin: "center",
-          color: color || "currentColor",
+          animation: "spin 1s linear infinite",
           ...style,
         }}
         {...rest}
       >
-        {/* Top - brightest */}
-        <path
-          d="M12 3V6"
-          stroke="currentColor"
-          strokeOpacity="1"
-          strokeWidth="2"
+        <circle
+          cx="12"
+          cy="12"
+          r="10"
+          stroke={color || "currentColor"}
+          strokeWidth={strokeWidth}
           strokeLinecap="round"
+          fill="none"
+          opacity={0.2}
         />
-        {/* Top-left */}
         <path
-          d="M5.63634 5.63604L7.75766 7.75736"
-          stroke="currentColor"
-          strokeOpacity="0.875"
-          strokeWidth="2"
+          d="M12 2C6.48 2 2 6.48 2 12"
+          stroke={color || "currentColor"}
+          strokeWidth={strokeWidth}
           strokeLinecap="round"
-        />
-        {/* Left */}
-        <path
-          d="M3 12H6"
-          stroke="currentColor"
-          strokeOpacity="0.75"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        {/* Bottom-left */}
-        <path
-          d="M5.63634 18.364L7.75766 16.2426"
-          stroke="currentColor"
-          strokeOpacity="0.625"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        {/* Bottom */}
-        <path
-          d="M12 18V21"
-          stroke="currentColor"
-          strokeOpacity="0.5"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        {/* Bottom-right */}
-        <path
-          d="M16.2429 16.2426L18.3643 18.364"
-          stroke="currentColor"
-          strokeOpacity="0.375"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        {/* Right */}
-        <path
-          d="M18 12H21"
-          stroke="currentColor"
-          strokeOpacity="0.25"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        {/* Top-right - dimmest */}
-        <path
-          d="M16.2429 7.75736L18.3643 5.63604"
-          stroke="currentColor"
-          strokeOpacity="0.125"
-          strokeWidth="2"
-          strokeLinecap="round"
+          fill="none"
         />
       </svg>
     </>
+  )
+}
+
+// Loading indicator that transitions from spinner to dot
+// Shows spinner when loading, animates to blue dot when done
+export function LoadingDot({
+  isLoading,
+  className,
+  dotClassName = "bg-[#307BD0]"
+}: {
+  isLoading: boolean
+  className?: string
+  dotClassName?: string
+}) {
+  return (
+    <div className={`relative ${className || ""}`}>
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+      {/* Spinner - visible when loading */}
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        className={`absolute inset-0 w-full h-full transition-[opacity,transform] duration-200 ease-out ${
+          isLoading ? "opacity-100 scale-100" : "opacity-0 scale-50"
+        }`}
+        style={{
+          animation: isLoading ? 'spin 1s linear infinite' : undefined,
+        }}
+      >
+        <circle
+          cx="12"
+          cy="12"
+          r="10"
+          stroke="currentColor"
+          strokeWidth={4}
+          strokeLinecap="round"
+          fill="none"
+          opacity={0.2}
+        />
+        <path
+          d="M12 2C6.48 2 2 6.48 2 12"
+          stroke="currentColor"
+          strokeWidth={4}
+          strokeLinecap="round"
+          fill="none"
+        />
+      </svg>
+      {/* Dot - appears when not loading */}
+      <div
+        className={`absolute inset-0 m-auto w-[80%] h-[80%] rounded-full transition-[opacity,transform] duration-200 ease-out ${dotClassName} ${
+          isLoading ? "opacity-0 scale-50" : "opacity-100 scale-100"
+        }`}
+      />
+    </div>
   )
 }
 
@@ -5141,6 +5151,45 @@ export function AgentIcon(props: IconProps) {
   )
 }
 
+// Custom agent icon - robot outline
+export function CustomAgentIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      {...props}
+    >
+      <path
+        d="M12 4H7C5.89543 4 5 4.89543 5 6V11C5 12.1046 5.89543 13 7 13H17C18.1046 13 19 12.1046 19 11V6C19 4.89543 18.1046 4 17 4H12ZM12 4V2M6 15L4 17M6 15C6 18.3137 8.68629 21 12 21C15.3137 21 18 18.3137 18 15M6 15V13M18 15L20 17M18 15V13M9 8V9M15 8V9"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+// Custom agent icon filled - robot filled
+export function CustomAgentIconFilled(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      {...props}
+    >
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M12 1C12.5523 1 13 1.44772 13 2V3H17C18.6569 3 20 4.34315 20 6V11C20 11.8885 19.6138 12.6868 19 13.2361V14.5858L20.7071 16.2929C21.0976 16.6834 21.0976 17.3166 20.7071 17.7071C20.3166 18.0976 19.6834 18.0976 19.2929 17.7071L18.681 17.0952C17.7905 19.9377 15.1361 22 12 22C8.8639 22 6.20948 19.9377 5.31897 17.0952L4.70711 17.7071C4.31658 18.0976 3.68342 18.0976 3.29289 17.7071C2.90237 17.3166 2.90237 16.6834 3.29289 16.2929L5 14.5858V13.2361C4.38625 12.6868 4 11.8885 4 11V6C4 4.34315 5.34315 3 7 3H11V2C11 1.44772 11.4477 1 12 1ZM7 5C6.44772 5 6 5.44772 6 6V11C6 11.5523 6.44772 12 7 12H17C17.5523 12 18 11.5523 18 11V6C18 5.44772 17.5523 5 17 5H7ZM9 7C9.55228 7 10 7.44772 10 8V9C10 9.55228 9.55228 10 9 10C8.44772 10 8 9.55228 8 9V8C8 7.44772 8.44772 7 9 7ZM15 7C15.5523 7 16 7.44772 16 8V9C16 9.55228 15.5523 10 15 10C14.4477 10 14 9.55228 14 9V8C14 7.44772 14.4477 7 15 7Z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
 // Expand icon (arrows pointing outward) - used for expandable tool outputs
 export function ExpandIcon(props: IconProps) {
   return (
@@ -5295,6 +5344,27 @@ export function SkillIcon(props: IconProps) {
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+// Skill icon filled - toolbox with tools (filled version)
+export function SkillIconFilled(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      width="24"
+      height="24"
+      {...props}
+    >
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M11.0039 10V6.20156C11.0039 5.52035 10.7721 4.85942 10.3465 4.32748L9.09712 2.76574C8.70993 2.28175 8.12372 2 7.50391 2C6.88409 2 6.29788 2.28175 5.91069 2.76574L4.6613 4.32748C4.23575 4.85942 4.00391 5.52035 4.00391 6.20156V10H3C2.44772 10 2 10.4477 2 11V18C2 19.6569 3.34315 21 5 21H19C20.6569 21 22 19.6569 22 18V11C22 10.4477 21.5523 10 21 10H20V4C20 2.89543 19.1046 2 18 2H14C12.8954 2 12 2.89543 12 4V10H11.0039ZM7.50391 4C7.49166 4 7.48008 4.00557 7.47243 4.01513L6.22304 5.57687C6.08119 5.75418 6.00391 5.97449 6.00391 6.20156V10H9.00391V6.20156C9.00391 5.97449 8.92663 5.75418 8.78477 5.57687L7.53539 4.01513C7.52773 4.00557 7.51615 4 7.50391 4ZM14 10H18V4H14V6H15.0039C15.5562 6 16.0039 6.44772 16.0039 7C16.0039 7.55228 15.5562 8 15.0039 8H14V10Z"
+        fill="currentColor"
       />
     </svg>
   )

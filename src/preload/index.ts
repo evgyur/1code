@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   logout: () => ipcRenderer.invoke("auth:logout"),
   startAuthFlow: () => ipcRenderer.invoke("auth:start-flow"),
   submitAuthCode: (code: string) => ipcRenderer.invoke("auth:submit-code", code),
+  updateUser: (updates: { name?: string }) => ipcRenderer.invoke("auth:update-user", updates),
 
   // Auth events
   onAuthSuccess: (callback: (user: any) => void) => {
@@ -136,6 +137,13 @@ contextBridge.exposeInMainWorld("desktopApi", {
     const handler = () => callback()
     ipcRenderer.on("shortcut:new-agent", handler)
     return () => ipcRenderer.removeListener("shortcut:new-agent", handler)
+  },
+
+  // File change events (from Claude Write/Edit tools)
+  onFileChanged: (callback: (data: { filePath: string; type: string; subChatId: string }) => void) => {
+    const handler = (_event: unknown, data: { filePath: string; type: string; subChatId: string }) => callback(data)
+    ipcRenderer.on("file-changed", handler)
+    return () => ipcRenderer.removeListener("file-changed", handler)
   },
 })
 
@@ -201,10 +209,19 @@ export interface DesktopApi {
   logout: () => Promise<void>
   startAuthFlow: () => Promise<void>
   submitAuthCode: (code: string) => Promise<void>
+  updateUser: (updates: { name?: string }) => Promise<{
+    id: string
+    email: string
+    name: string | null
+    imageUrl: string | null
+    username: string | null
+  } | null>
   onAuthSuccess: (callback: (user: any) => void) => () => void
   onAuthError: (callback: (error: string) => void) => () => void
   // Shortcuts
   onShortcutNewAgent: (callback: () => void) => () => void
+  // File changes
+  onFileChanged: (callback: (data: { filePath: string; type: string; subChatId: string }) => void) => () => void
 }
 
 declare global {

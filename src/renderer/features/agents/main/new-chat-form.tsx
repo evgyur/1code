@@ -79,6 +79,7 @@ import { agentsSidebarOpenAtom, agentsUnseenChangesAtom } from "../atoms"
 import { AgentSendButton } from "../components/agent-send-button"
 import { CreateBranchDialog } from "../components/create-branch-dialog"
 import { formatTimeAgo } from "../utils/format-time-ago"
+import { handlePasteEvent } from "../utils/paste-text"
 import {
   loadGlobalDrafts,
   saveGlobalDrafts,
@@ -224,6 +225,12 @@ export function NewChatForm({
   const [showMentionDropdown, setShowMentionDropdown] = useState(false)
   const [mentionSearchText, setMentionSearchText] = useState("")
   const [mentionPosition, setMentionPosition] = useState({ top: 0, left: 0 })
+
+  // Mention subpage navigation state
+  const [showingFilesList, setShowingFilesList] = useState(false)
+  const [showingSkillsList, setShowingSkillsList] = useState(false)
+  const [showingAgentsList, setShowingAgentsList] = useState(false)
+  const [showingToolsList, setShowingToolsList] = useState(false)
 
   // Slash command dropdown state
   const [showSlashDropdown, setShowSlashDropdown] = useState(false)
@@ -442,7 +449,7 @@ export function NewChatForm({
     setSelectedBranch,
   ])
 
-  // Auto-focus input when NewChatForm is shown (when clicking "New Agent")
+  // Auto-focus input when NewChatForm is shown (when clicking "New Chat")
   // Skip on mobile to prevent keyboard from opening automatically
   useEffect(() => {
     if (isMobileFullscreen) return // Don't autofocus on mobile
@@ -665,8 +672,34 @@ export function NewChatForm({
   ])
 
   const handleMentionSelect = useCallback((mention: FileMentionOption) => {
+    // Category navigation - enter subpage instead of inserting mention
+    if (mention.type === "category") {
+      if (mention.id === "files") {
+        setShowingFilesList(true)
+        return
+      }
+      if (mention.id === "skills") {
+        setShowingSkillsList(true)
+        return
+      }
+      if (mention.id === "agents") {
+        setShowingAgentsList(true)
+        return
+      }
+      if (mention.id === "tools") {
+        setShowingToolsList(true)
+        return
+      }
+    }
+
+    // Otherwise: insert mention as normal
     editorRef.current?.insertMention(mention)
     setShowMentionDropdown(false)
+    // Reset subpage state
+    setShowingFilesList(false)
+    setShowingSkillsList(false)
+    setShowingAgentsList(false)
+    setShowingToolsList(false)
   }, [])
 
   // Save draft to localStorage when content changes
@@ -727,6 +760,11 @@ export function NewChatForm({
       if (validatedProject) {
         setMentionSearchText(searchText)
         setMentionPosition({ top: rect.top, left: rect.left })
+        // Reset subpage state when opening dropdown
+        setShowingFilesList(false)
+        setShowingSkillsList(false)
+        setShowingAgentsList(false)
+        setShowingToolsList(false)
         setShowMentionDropdown(true)
       }
     },
@@ -735,6 +773,11 @@ export function NewChatForm({
 
   const handleCloseTrigger = useCallback(() => {
     setShowMentionDropdown(false)
+    // Reset subpage state when closing
+    setShowingFilesList(false)
+    setShowingSkillsList(false)
+    setShowingAgentsList(false)
+    setShowingToolsList(false)
   }, [])
 
   // Slash command handlers
@@ -801,25 +844,9 @@ export function NewChatForm({
   )
 
   // Paste handler for images and plain text
+  // Uses async text insertion to prevent UI freeze with large text
   const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const files = Array.from(e.clipboardData.items)
-        .filter((item) => item.type.startsWith("image/"))
-        .map((item) => item.getAsFile())
-        .filter(Boolean) as File[]
-
-      if (files.length > 0) {
-        e.preventDefault()
-        handleAddAttachments(files)
-      } else {
-        // Paste as plain text only (prevents HTML from being pasted)
-        const text = e.clipboardData.getData("text/plain")
-        if (text) {
-          e.preventDefault()
-          document.execCommand("insertText", false, text)
-        }
-      }
-    },
+    (e: React.ClipboardEvent) => handlePasteEvent(e, handleAddAttachments),
     [handleAddAttachments],
   )
 
@@ -964,7 +991,7 @@ export function NewChatForm({
                     isDragOver && "ring-2 ring-primary/50 border-primary/50",
                     isFocused && !isDragOver && "ring-2 ring-primary/50",
                   )}
-                  maxHeight={200}
+                  maxHeight={240}
                   onSubmit={handleSend}
                   contextItems={contextItems}
                 >
@@ -981,7 +1008,7 @@ export function NewChatForm({
                       onShiftTab={() => setIsPlanMode((prev) => !prev)}
                       placeholder="Plan, @ for context, / for commands"
                       className={cn(
-                        "bg-transparent max-h-[200px] overflow-y-auto p-1",
+                        "bg-transparent max-h-[240px] overflow-y-auto p-1",
                         isMobileFullscreen ? "min-h-[56px]" : "min-h-[44px]",
                       )}
                       onPaste={handlePaste}
@@ -1412,11 +1439,22 @@ export function NewChatForm({
                 {/* Desktop: use projectPath for local file search */}
                 <AgentsFileMention
                   isOpen={showMentionDropdown && !!validatedProject}
-                  onClose={() => setShowMentionDropdown(false)}
+                  onClose={() => {
+                    setShowMentionDropdown(false)
+                    // Reset subpage state when dropdown closes
+                    setShowingFilesList(false)
+                    setShowingSkillsList(false)
+                    setShowingAgentsList(false)
+                    setShowingToolsList(false)
+                  }}
                   onSelect={handleMentionSelect}
                   searchText={mentionSearchText}
                   position={mentionPosition}
                   projectPath={validatedProject?.path}
+                  showingFilesList={showingFilesList}
+                  showingSkillsList={showingSkillsList}
+                  showingAgentsList={showingAgentsList}
+                  showingToolsList={showingToolsList}
                 />
 
                 {/* Slash command dropdown */}

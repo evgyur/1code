@@ -1,6 +1,6 @@
 {
   "name": "21st-desktop",
-  "version": "0.0.14",
+  "version": "0.0.19",
   "private": true,
   "description": "1Code - UI for parallel work with AI agents",
   "author": "21st.dev",
@@ -85,6 +85,7 @@
     "react-icons": "^5.5.0",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.0",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "shiki": "^1.24.4",
     "simple-git": "^3.28.0",
@@ -206,14 +207,10 @@
     },
     "win": {
       "target": [
+        "nsis",
         "portable"
       ],
-      "icon": "build/icon.ico",
-      "sign": null,
-      "signingHashAlgorithms": null,
-      "certificateFile": null,
-      "certificatePassword": null,
-      "executableName": "1Code.exe"
+      "icon": "build/icon.ico"
     },
     "linux": {
       "target": [

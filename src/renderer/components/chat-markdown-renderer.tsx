@@ -2,6 +2,7 @@ import { cn } from "../lib/utils"
 import { memo, useMemo, useState, useCallback, useEffect } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import remarkBreaks from "remark-breaks"
 import { Copy, Check } from "lucide-react"
 import { useCodeTheme } from "../lib/hooks/use-code-theme"
 import { highlightCode } from "../lib/themes/shiki-theme-loader"
@@ -211,7 +212,7 @@ const sizeStyles: Record<
       "bg-foreground/[0.06] dark:bg-foreground/[0.1] font-mono text-[85%] rounded px-[0.4em] py-[0.2em] break-all",
     blockquote:
       "border-l-2 border-foreground/20 pl-3 text-foreground/70 mb-px text-sm",
-    hr: "mt-6 mb-4 border-t border-border",
+    hr: "mt-8 mb-4 border-t border-border",
     table: "w-full text-sm",
     thead: "border-b border-border",
     tbody: "",
@@ -235,7 +236,7 @@ const sizeStyles: Record<
       "bg-foreground/[0.06] dark:bg-foreground/[0.1] font-mono text-[85%] rounded px-[0.4em] py-[0.2em] break-all",
     blockquote:
       "border-l-2 border-foreground/20 pl-4 text-foreground/70 mb-px",
-    hr: "mt-6 mb-4 border-t border-border",
+    hr: "mt-8 mb-4 border-t border-border",
     table: "w-full text-sm",
     thead: "border-b border-border",
     tbody: "",
@@ -259,7 +260,7 @@ const sizeStyles: Record<
       "bg-foreground/[0.06] dark:bg-foreground/[0.1] font-mono text-[85%] rounded px-[0.4em] py-[0.2em] break-all",
     blockquote:
       "border-l-2 border-foreground/20 pl-4 text-foreground/70 mb-px",
-    hr: "mt-6 mb-4 border-t border-border",
+    hr: "mt-8 mb-4 border-t border-border",
     table: "w-full text-sm",
     thead: "border-b border-border",
     tbody: "",
@@ -441,6 +442,8 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
         "[&_li>p]:inline [&_li>p]:mb-0",
         // Prevent horizontal overflow on mobile
         "overflow-hidden break-words",
+        // Global spacing: elements before hr get extra bottom margin (for spacing above divider)
+        "[&_p:has(+hr)]:mb-6 [&_ul:has(+hr)]:mb-6 [&_ol:has(+hr)]:mb-6 [&_div:has(+hr)]:mb-6 [&_table:has(+hr)]:mb-6 [&_h1:has(+hr)]:mb-6 [&_h2:has(+hr)]:mb-6 [&_h3:has(+hr)]:mb-6 [&_blockquote:has(+hr)]:mb-6",
         // Global spacing: elements after hr get extra top margin
         "[&_hr+p]:mt-4 [&_hr+ul]:mt-4 [&_hr+ol]:mt-4",
         // Global spacing: elements after code blocks get extra top margin
@@ -450,7 +453,7 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
         {processedContent}
       </ReactMarkdown>
     </div>

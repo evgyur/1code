@@ -707,4 +707,216 @@ export const chatsRouter = router({
         )
       }
     }),
+
+  /**
+   * Get file change stats for all workspaces
+   * Parses messages from all sub-chats and aggregates Edit/Write tool calls
+   * If openSubChatIds provided, only count stats from those sub-chats
+   */
+  getFileStats: publicProcedure
+    .input(z.object({ openSubChatIds: z.array(z.string()).optional() }).optional())
+    .query(({ input }) => {
+    const db = getDatabase()
+    const openSubChatIdsSet = input?.openSubChatIds ? new Set(input.openSubChatIds) : null
+
+    // Get all non-archived chats with their sub-chats
+    const allChats = db
+      .select({
+        chatId: chats.id,
+        subChatId: subChats.id,
+        messages: subChats.messages,
+      })
+      .from(chats)
+      .leftJoin(subChats, eq(subChats.chatId, chats.id))
+      .where(isNull(chats.archivedAt))
+      .all()
+      // Filter by open sub-chats if provided
+      .filter(row => !openSubChatIdsSet || !row.subChatId || openSubChatIdsSet.has(row.subChatId))
+
+    // Aggregate stats per workspace (chatId)
+    const statsMap = new Map<
+      string,
+      { additions: number; deletions: number; fileCount: number }
+    >()
+
+    for (const row of allChats) {
+      if (!row.messages || !row.chatId) continue
+
+      try {
+        const messages = JSON.parse(row.messages) as Array<{
+          role: string
+          parts?: Array<{
+            type: string
+            input?: {
+              file_path?: string
+              old_string?: string
+              new_string?: string
+              content?: string
+            }
+          }>
+        }>
+
+        // Track file states for this sub-chat
+        const fileStates = new Map<
+          string,
+          { originalContent: string | null; currentContent: string }
+        >()
+
+        for (const msg of messages) {
+          if (msg.role !== "assistant") continue
+          for (const part of msg.parts || []) {
+            if (part.type === "tool-Edit" || part.type === "tool-Write") {
+              const filePath = part.input?.file_path
+              if (!filePath) continue
+              // Skip session files
+              if (
+                filePath.includes("claude-sessions") ||
+                filePath.includes("Application Support")
+              )
+                continue
+
+              const oldString = part.input?.old_string || ""
+              const newString =
+                part.input?.new_string || part.input?.content || ""
+
+              const existing = fileStates.get(filePath)
+              if (existing) {
+                existing.currentContent = newString
+              } else {
+                fileStates.set(filePath, {
+                  originalContent: part.type === "tool-Write" ? null : oldString,
+                  currentContent: newString,
+                })
+              }
+            }
+          }
+        }
+
+        // Calculate stats for this sub-chat and add to workspace total
+        let subChatAdditions = 0
+        let subChatDeletions = 0
+        let subChatFileCount = 0
+
+        for (const [, state] of fileStates) {
+          const original = state.originalContent || ""
+          if (original === state.currentContent) continue
+
+          const oldLines = original ? original.split("\n").length : 0
+          const newLines = state.currentContent
+            ? state.currentContent.split("\n").length
+            : 0
+
+          if (!original) {
+            // New file
+            subChatAdditions += newLines
+          } else {
+            subChatAdditions += newLines
+            subChatDeletions += oldLines
+          }
+          subChatFileCount += 1
+        }
+
+        // Add to workspace total
+        const existing = statsMap.get(row.chatId) || {
+          additions: 0,
+          deletions: 0,
+          fileCount: 0,
+        }
+        existing.additions += subChatAdditions
+        existing.deletions += subChatDeletions
+        existing.fileCount += subChatFileCount
+        statsMap.set(row.chatId, existing)
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+
+    // Convert to array for easier consumption
+    return Array.from(statsMap.entries()).map(([chatId, stats]) => ({
+      chatId,
+      ...stats,
+    }))
+  }),
+
+  /**
+   * Get sub-chats with pending plan approvals
+   * Parses messages to find ExitPlanMode tool calls without subsequent "Implement plan" user message
+   * Logic must match active-chat.tsx hasUnapprovedPlan
+   * If openSubChatIds provided, only check those sub-chats
+   */
+  getPendingPlanApprovals: publicProcedure
+    .input(z.object({ openSubChatIds: z.array(z.string()).optional() }).optional())
+    .query(({ input }) => {
+    const db = getDatabase()
+    const openSubChatIdsSet = input?.openSubChatIds ? new Set(input.openSubChatIds) : null
+
+    // Get all non-archived chats with their sub-chats
+    const allSubChats = db
+      .select({
+        chatId: chats.id,
+        subChatId: subChats.id,
+        messages: subChats.messages,
+      })
+      .from(chats)
+      .leftJoin(subChats, eq(subChats.chatId, chats.id))
+      .where(isNull(chats.archivedAt))
+      .all()
+      // Filter by open sub-chats if provided
+      .filter(row => !openSubChatIdsSet || !row.subChatId || openSubChatIdsSet.has(row.subChatId))
+
+    const pendingApprovals: Array<{ subChatId: string; chatId: string }> = []
+
+    for (const row of allSubChats) {
+      if (!row.messages || !row.subChatId || !row.chatId) continue
+
+      try {
+        const messages = JSON.parse(row.messages) as Array<{
+          role: string
+          content?: string
+          parts?: Array<{
+            type: string
+            text?: string
+          }>
+        }>
+
+        // Traverse messages from end to find unapproved ExitPlanMode
+        // Logic matches active-chat.tsx hasUnapprovedPlan
+        let hasUnapprovedPlan = false
+
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i]
+          if (!msg) continue
+
+          // If user message says "Implement plan" (exact match), plan is already approved
+          if (msg.role === "user") {
+            const textPart = msg.parts?.find((p) => p.type === "text")
+            const text = textPart?.text || ""
+            if (text.trim().toLowerCase() === "implement plan") {
+              break // Plan was approved, stop searching
+            }
+          }
+
+          // If assistant message with ExitPlanMode, we found an unapproved plan
+          if (msg.role === "assistant" && msg.parts) {
+            const exitPlanPart = msg.parts.find((p) => p.type === "tool-ExitPlanMode")
+            if (exitPlanPart) {
+              hasUnapprovedPlan = true
+              break
+            }
+          }
+        }
+
+        if (hasUnapprovedPlan) {
+          pendingApprovals.push({
+            subChatId: row.subChatId,
+            chatId: row.chatId,
+          })
+        }
+      } catch {
+        // Skip invalid JSON
+      }
+    }
+
+    return pendingApprovals
+  }),
 })

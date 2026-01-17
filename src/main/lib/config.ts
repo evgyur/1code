@@ -1,20 +1,20 @@
 /**
  * Shared configuration for the desktop app
  */
-
-// API URLs
-const API_URLS = {
-  production: "https://21st.dev",
-  development: "http://localhost:3000",
-} as const
+import { app } from "electron"
 
 const IS_DEV = !!process.env.ELECTRON_RENDERER_URL
 
 /**
- * Get the API base URL based on environment
+ * Get the API base URL
+ * In packaged app, ALWAYS use production URL to prevent localhost leaking into releases
+ * In dev mode, allow override via MAIN_VITE_API_URL env variable
  */
 export function getApiUrl(): string {
-  return IS_DEV ? API_URLS.development : API_URLS.production
+  if (app.isPackaged) {
+    return "https://21st.dev"
+  }
+  return import.meta.env.MAIN_VITE_API_URL || "https://21st.dev"
 }
 
 /**

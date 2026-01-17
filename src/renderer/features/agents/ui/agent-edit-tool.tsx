@@ -350,22 +350,25 @@ export const AgentEditTool = memo(function AgentEditTool({
   const activeLines =
     isInputStreaming && streamingLines.length > 0 ? streamingLines : diffLines
 
-  // Find index of first added line (to focus on when collapsed)
-  const firstAddedIndex = useMemo(
-    () => activeLines.findIndex((line: DiffLine) => line.type === "added"),
-    [activeLines],
-  )
+  // Find index of first change line (added or removed) to focus on when collapsed
+  // Prioritize added lines, but fall back to removed lines if no additions exist
+  const firstChangeIndex = useMemo(() => {
+    const firstAdded = activeLines.findIndex((line: DiffLine) => line.type === "added")
+    if (firstAdded !== -1) return firstAdded
+    // No additions - look for first removal instead
+    return activeLines.findIndex((line: DiffLine) => line.type === "removed")
+  }, [activeLines])
 
-  // Reorder lines for collapsed view: show from first added line (memoized)
+  // Reorder lines for collapsed view: show from first change line (memoized)
   const displayLines = useMemo(
     () =>
-      !isOutputExpanded && firstAddedIndex > 0
+      !isOutputExpanded && firstChangeIndex > 0
         ? [
-            ...activeLines.slice(firstAddedIndex),
-            ...activeLines.slice(0, firstAddedIndex),
+            ...activeLines.slice(firstChangeIndex),
+            ...activeLines.slice(0, firstChangeIndex),
           ]
         : activeLines,
-    [activeLines, isOutputExpanded, firstAddedIndex],
+    [activeLines, isOutputExpanded, firstChangeIndex],
   )
 
   // Batch highlight all lines at once (instead of N×useEffect)
@@ -465,7 +468,7 @@ export const AgentEditTool = memo(function AgentEditTool({
         {/* Status and expand button */}
         <div className="flex items-center gap-2 flex-shrink-0 ml-2">
           {/* Diff stats or spinner */}
-          <div className="flex items-center gap-1.5 text-xs">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             {isPending || isInputStreaming ? (
               <IconSpinner className="w-3 h-3" />
             ) : diffStats ? (

@@ -9,7 +9,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../../components/ui/tooltip";
 import { useEffect, useRef, useState } from "react";
 import { HiArrowPath } from "react-icons/hi2";
-import { LuLoaderCircle } from "react-icons/lu";
+import { IconSpinner } from "../../../../icons";
 import { trpc } from "../../../../lib/trpc";
 import { PRIcon } from "../PRIcon";
 import { usePRStatus } from "../../../../hooks/usePRStatus";
@@ -149,7 +149,7 @@ export function ChangesHeader({
 
 				{/* PR Status Icon */}
 				{isPRLoading ? (
-					<LuLoaderCircle className="w-4 h-4 animate-spin text-muted-foreground shrink-0" />
+					<IconSpinner className="w-4 h-4 text-muted-foreground shrink-0" />
 				) : pr ? (
 					<Tooltip>
 						<TooltipTrigger asChild>

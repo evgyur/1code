@@ -18,7 +18,7 @@ import { Circle } from "lucide-react"
 import { AgentToolCall } from "./agent-tool-call"
 import { currentTodosAtomFamily } from "../atoms"
 
-interface TodoItem {
+export interface TodoItem {
   content: string
   status: "pending" | "in_progress" | "completed"
   activeForm?: string
@@ -120,6 +120,77 @@ function getStatusIconComponent(status: TodoItem["status"]) {
     default:
       return Circle
   }
+}
+
+// Pie-style progress circle - fills sectors like pizza slices
+const ProgressCircle = ({
+  completed,
+  total,
+  size = 16,
+  className,
+}: {
+  completed: number
+  total: number
+  size?: number
+  className?: string
+}) => {
+  const cx = size / 2
+  const cy = size / 2
+  const outerRadius = (size - 1) / 2
+  const innerRadius = outerRadius - 1.5 // Leave space for outer border
+
+  // Create pie segments (no borders on segments, just fill)
+  const segments = []
+  for (let i = 0; i < total; i++) {
+    const startAngle = (i / total) * 360 - 90 // Start from top
+    const endAngle = ((i + 1) / total) * 360 - 90
+    const gap = total > 1 ? 4 : 0 // Gap between segments
+    const adjustedStartAngle = startAngle + gap / 2
+    const adjustedEndAngle = endAngle - gap / 2
+
+    // Convert to radians
+    const startRad = (adjustedStartAngle * Math.PI) / 180
+    const endRad = (adjustedEndAngle * Math.PI) / 180
+
+    // Calculate arc points
+    const x1 = cx + innerRadius * Math.cos(startRad)
+    const y1 = cy + innerRadius * Math.sin(startRad)
+    const x2 = cx + innerRadius * Math.cos(endRad)
+    const y2 = cy + innerRadius * Math.sin(endRad)
+
+    const largeArcFlag = endAngle - startAngle > 180 ? 1 : 0
+    const pathData = `M ${cx} ${cy} L ${x1} ${y1} A ${innerRadius} ${innerRadius} 0 ${largeArcFlag} 1 ${x2} ${y2} Z`
+
+    segments.push(
+      <path
+        key={i}
+        d={pathData}
+        fill={i < completed ? "currentColor" : "transparent"}
+        opacity={i < completed ? 0.7 : 0.15}
+      />,
+    )
+  }
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      className={cn("text-muted-foreground", className)}
+    >
+      {/* Outer border circle */}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={outerRadius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={0.5}
+        opacity={0.3}
+      />
+      {segments}
+    </svg>
+  )
 }
 
 const TodoStatusIcon = ({
@@ -235,13 +306,6 @@ export const AgentTodoTool = memo(function AgentTodoTool({
     }
   }, [newTodos, setTodoState, creationToolCallId, part.toolCallId, isCreationToolCall, syncedTodos.length])
 
-  // Auto-expand on creation
-  useEffect(() => {
-    if (changes.type === "creation") {
-      setIsExpanded(true)
-    }
-  }, [changes.type])
-
   // Check if we're still streaming input (data not yet complete)
   const isStreaming = part.state === "input-streaming"
 
@@ -255,12 +319,16 @@ export const AgentTodoTool = memo(function AgentTodoTool({
       return null
     }
 
-    // For creation tool calls, show the placeholder
+    // For creation tool calls, show the placeholder - also sticky with top offset
     return (
-      <div className="flex items-start gap-1.5 py-0.5 rounded-md px-2">
-        <div className="flex-1 min-w-0 flex items-center gap-1.5">
-          <div className="text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">
-            <span className="font-medium whitespace-nowrap flex-shrink-0">
+      <div
+        className="mx-2 sticky bg-background"
+        style={{ top: 'calc(var(--user-message-height, 28px) - 29px)' }}
+      >
+        <div className="rounded-lg border border-border bg-muted/30 px-2.5 py-1.5">
+          <div className="flex items-center gap-1.5">
+            <PlanIcon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+            <span className="text-xs font-medium whitespace-nowrap flex-shrink-0">
               {isPending ? (
                 <TextShimmer
                   as="span"
@@ -407,26 +475,35 @@ export const AgentTodoTool = memo(function AgentTodoTool({
   ).length
   const totalTodos = displayTodos.length
 
-  // Header title
-  const getHeaderTitle = () => {
-    if (isPending) {
-      return <span>Updating todos...</span>
-    }
-    return (
-      <span>
-        To-dos{" "}
-        <span className="text-muted-foreground/60">
-          {completedCount}/{totalTodos}
-        </span>
-      </span>
-    )
-  }
+  // Find current task (first in_progress, or first pending if none in progress)
+  const currentTask = displayTodos.find((t) => t.status === "in_progress")
+    || displayTodos.find((t) => t.status === "pending")
+
+  // Find current task index for progress display
+  const currentTaskIndex = currentTask
+    ? displayTodos.findIndex((t) => t === currentTask) + 1
+    : completedCount
 
   return (
-    <div className="rounded-lg border border-border bg-muted/30 overflow-hidden mx-2">
-      {/* Header - click anywhere to expand/collapse */}
+    <div
+      className={cn(
+        "mx-2",
+        // Make entire creation todo sticky
+        isCreationToolCall && "sticky bg-background"
+      )}
+      style={isCreationToolCall ? {
+        // Offset so TOP BLOCK (title) goes fully under user message
+        // TOP BLOCK height: py-1.5 (12px) + text-xs (~16px) + border (1px) = ~29px
+        top: 'calc(var(--user-message-height, 28px) - 29px)'
+      } : undefined}
+    >
+      {/* TOP BLOCK - Plan title with expand/collapse button */}
+      {/* z-[9] - UNDER user message (user message has z-10) */}
       <div
-        className="flex items-center justify-between px-2.5 py-2 cursor-pointer hover:bg-muted/50 transition-colors duration-150"
+        className={cn(
+          "rounded-t-lg border border-b-0 border-border bg-muted/30 px-2.5 py-1.5 cursor-pointer hover:bg-muted/40 transition-colors duration-150",
+          isCreationToolCall && "relative z-[9]"
+        )}
         onClick={() => setIsExpanded(!isExpanded)}
         role="button"
         aria-expanded={isExpanded}
@@ -439,31 +516,16 @@ export const AgentTodoTool = memo(function AgentTodoTool({
           }
         }}
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <PlanIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            {isPending ? (
-              <TextShimmer
-                as="span"
-                duration={1.2}
-                className="text-xs font-medium"
-              >
-                {getHeaderTitle()}
-              </TextShimmer>
-            ) : (
-              <span className="text-xs font-medium text-foreground">
-                {getHeaderTitle()}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Right side */}
-        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-          {isPending && <IconSpinner className="w-3 h-3" />}
-
+        <div className="flex items-center gap-1.5">
+          <PlanIcon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+          <span className="text-xs font-medium text-foreground">
+            To-dos
+          </span>
+          <span className="text-xs text-muted-foreground truncate flex-1">
+            {displayTodos[0]?.content || "Todo List"}
+          </span>
           {/* Expand/Collapse icon */}
-          <div className="relative w-4 h-4">
+          <div className="relative w-4 h-4 flex-shrink-0">
             <ExpandIcon
               className={cn(
                 "absolute inset-0 w-4 h-4 text-muted-foreground transition-[opacity,transform] duration-200 ease-out",
@@ -480,38 +542,89 @@ export const AgentTodoTool = memo(function AgentTodoTool({
         </div>
       </div>
 
-      {/* Expanded content - todo list */}
-      {isExpanded && (
-        <div className="border-t border-border max-h-[300px] overflow-y-auto">
-          {displayTodos.map((todo, idx) => (
-            <div
-              key={idx}
-              className={cn(
-                "flex items-center gap-2 px-2.5 py-1.5",
-                idx !== displayTodos.length - 1 && "border-b border-border/30",
+      {/* BOTTOM BLOCK - Current task + progress (expandable) */}
+      {/* z-20 - ABOVE user message shadow */}
+      <div className={cn(
+        "rounded-b-lg border border-border bg-muted/20 shadow-xl shadow-background",
+        isCreationToolCall && "relative z-20"
+      )}>
+        {/* Collapsed view - progress circle + current task + count */}
+        {!isExpanded && (
+          <div
+            className="flex items-center gap-2.5 px-2.5 py-1.5 cursor-pointer hover:bg-muted/30 transition-colors duration-150"
+            onClick={() => setIsExpanded(true)}
+          >
+            {/* Progress circle or checkmark when all completed */}
+            {completedCount === totalTodos && totalTodos > 0 ? (
+              <div className="w-4 h-4 rounded-full bg-muted flex items-center justify-center flex-shrink-0" style={{ border: "0.5px solid hsl(var(--border))" }}>
+                <CheckIcon className="w-2.5 h-2.5 text-muted-foreground" />
+              </div>
+            ) : (
+              <ProgressCircle
+                completed={completedCount}
+                total={totalTodos}
+                size={16}
+                className="flex-shrink-0"
+              />
+            )}
+
+            {/* Current task name */}
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              {currentTask && (
+                <span className="text-xs text-muted-foreground truncate">
+                  {currentTask.status === "in_progress"
+                    ? currentTask.activeForm || currentTask.content
+                    : currentTask.content}
+                </span>
               )}
-            >
-              <TodoStatusIcon status={todo.status} isPending={isPending} />
-              <span
+              {!currentTask && completedCount === totalTodos && totalTodos > 0 && (
+                <span className="text-xs text-muted-foreground truncate">
+                  {displayTodos[totalTodos - 1]?.content}
+                </span>
+              )}
+            </div>
+
+            {/* Right side - task count */}
+            <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
+              {currentTaskIndex}/{totalTodos}
+            </span>
+          </div>
+        )}
+
+        {/* Expanded content - full todo list */}
+        {isExpanded && (
+          <div
+            className="max-h-[300px] overflow-y-auto cursor-pointer"
+            onClick={() => setIsExpanded(false)}
+          >
+            {displayTodos.map((todo, idx) => (
+              <div
+                key={idx}
                 className={cn(
-                  "text-xs truncate",
-                  // During streaming (isPending), use consistent muted color for all items
-                  // to avoid jarring color changes as items stream in
-                  isPending
-                    ? "text-muted-foreground"
-                    : todo.status === "completed"
-                      ? "line-through text-muted-foreground"
-                      : todo.status === "pending"
-                        ? "text-muted-foreground"
-                        : "text-foreground",
+                  "flex items-center gap-2 px-2.5 py-1.5",
+                  idx !== displayTodos.length - 1 && "border-b border-border/30",
                 )}
               >
-                {todo.content}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+                <TodoStatusIcon status={todo.status} isPending={isPending} />
+                <span
+                  className={cn(
+                    "text-xs truncate",
+                    isPending
+                      ? "text-muted-foreground"
+                      : todo.status === "completed"
+                        ? "line-through text-muted-foreground"
+                        : todo.status === "pending"
+                          ? "text-muted-foreground"
+                          : "text-foreground",
+                  )}
+                >
+                  {todo.content}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 })

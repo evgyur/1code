@@ -22,6 +22,9 @@ interface AgentContextIndicatorProps {
   messages: Array<{ metadata?: AgentMessageMetadata }>
   modelId?: ModelId
   className?: string
+  onCompact?: () => void
+  isCompacting?: boolean
+  disabled?: boolean
 }
 
 function formatTokens(tokens: number): string {
@@ -40,15 +43,11 @@ function CircularProgress({
   size = 18,
   strokeWidth = 2,
   className,
-  isCritical,
-  isNearingLimit,
 }: {
   percent: number
   size?: number
   strokeWidth?: number
   className?: string
-  isCritical?: boolean
-  isNearingLimit?: boolean
 }) {
   const radius = (size - strokeWidth) / 2
   const circumference = 2 * Math.PI * radius
@@ -81,14 +80,7 @@ function CircularProgress({
         strokeDasharray={circumference}
         strokeDashoffset={offset}
         strokeLinecap="round"
-        className={cn(
-          "transition-all duration-300",
-          isCritical
-            ? "text-rose-500"
-            : isNearingLimit
-              ? "text-amber-500"
-              : "text-muted-foreground/60",
-        )}
+        className="transition-all duration-300 text-muted-foreground/60"
       />
     </svg>
   )
@@ -98,6 +90,9 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
   messages,
   modelId = "sonnet",
   className,
+  onCompact,
+  isCompacting,
+  disabled,
 }: AgentContextIndicatorProps) {
   // Calculate session totals from all message metadata
   const sessionTotals = useMemo(() => {
@@ -129,17 +124,21 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
     (sessionTotals.totalTokens / contextWindow) * 100,
   )
 
-  // Determine warning levels
-  const isNearingLimit = percentUsed >= 75
-  const isCritical = percentUsed >= 90
   const isEmpty = sessionTotals.totalTokens === 0
+
+  const isClickable = onCompact && !disabled && !isCompacting
 
   return (
     <Tooltip delayDuration={300}>
       <TooltipTrigger asChild>
         <div
+          onClick={isClickable ? onCompact : undefined}
           className={cn(
-            "h-4 w-4 flex items-center justify-center cursor-default",
+            "h-4 w-4 flex items-center justify-center",
+            isClickable
+              ? "cursor-pointer hover:opacity-70 transition-opacity"
+              : "cursor-default",
+            disabled && "opacity-50",
             className,
           )}
         >
@@ -147,8 +146,7 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
             percent={percentUsed}
             size={14}
             strokeWidth={2.5}
-            isCritical={isCritical}
-            isNearingLimit={isNearingLimit}
+            className={isCompacting ? "animate-pulse" : undefined}
           />
         </div>
       </TooltipTrigger>

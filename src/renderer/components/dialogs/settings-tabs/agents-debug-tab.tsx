@@ -203,6 +203,73 @@ export function AgentsDebugTab() {
         </div>
       </div>
 
+      {/* Toast Testing */}
+      <div className="space-y-3">
+        <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+          Toast Testing
+        </h4>
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              toast.info("Cancelation sent", {
+                description: "Sent to John Smith",
+                action: {
+                  label: "Undo",
+                  onClick: () => toast("Undone!"),
+                },
+              })
+            }
+          >
+            Info + Undo
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => toast.success("Success!", { description: "Operation completed" })}
+          >
+            Success
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => toast.error("Error", { description: "Something went wrong" })}
+          >
+            Error
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => toast("Default toast", { description: "This is a description" })}
+          >
+            Default
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const id = toast.loading("Loading...", { description: "Please wait" })
+              setTimeout(() => toast.dismiss(id), 3000)
+            }}
+          >
+            Loading
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const id = toast.loading("Processing...")
+              setTimeout(() => {
+                toast.success("Done!", { id })
+              }, 2000)
+            }}
+          >
+            Promise
+          </Button>
+        </div>
+      </div>
+
       {/* Data Management */}
       <div className="space-y-3">
         <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">

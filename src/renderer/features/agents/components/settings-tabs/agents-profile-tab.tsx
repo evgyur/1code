@@ -4,36 +4,47 @@ import { useState, useEffect, useRef } from "react"
 import { Button } from "../../../../components/ui/button"
 import { Input } from "../../../../components/ui/input"
 import { Label } from "../../../../components/ui/label"
-// Desktop: stub for user profile hooks
-const useUserProfile = () => ({
-  clerkUser: {
-    fullName: "Demo User",
-    imageUrl: null as string | null,
-    externalAccounts: [{ provider: "github", username: "demo-user" }],
-  },
-  user: {
-    display_name: "Demo User",
-    display_image_url: null as string | null,
-    fullName: "Demo User",
-    imageUrl: null as string | null,
-    externalAccounts: [{ provider: "github", username: "demo-user" }],
-  },
-  isLoading: false,
-})
-const UserAvatar = ({ user, className }: any) => null
-import { ClaudeCodeLogoIcon } from "../../../../components/ui/icons"
+import { ClaudeCodeLogoIcon, IconSpinner } from "../../../../components/ui/icons"
 import { toast } from "sonner"
-// Desktop: stub for image upload
+import { Upload, Edit } from "lucide-react"
+import { motion } from "motion/react"
+import { cn } from "../../../../lib/utils"
+
+// Desktop user interface
+interface DesktopUser {
+  id: string
+  email: string
+  name: string | null
+  imageUrl: string | null
+  username: string | null
+}
+
+// Custom hook for desktop user profile
+const useDesktopUserProfile = () => {
+  const [user, setUser] = useState<DesktopUser | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchUser() {
+      if (window.desktopApi?.getUser) {
+        const userData = await window.desktopApi.getUser()
+        setUser(userData)
+      }
+      setIsLoading(false)
+    }
+    fetchUser()
+  }, [])
+
+  return { user, setUser, isLoading }
+}
+
+// Stub for image upload (not implemented in desktop yet)
 const useImageUpload = () => ({
   previewUrl: null as string | null,
   fileInputRef: { current: null as HTMLInputElement | null },
   handleThumbnailClick: () => {},
   handleFileChange: async (_event?: unknown) => null as string | null
 })
-import { IconSpinner } from "../../../../components/ui/icons"
-import { Upload, Edit, X } from "lucide-react"
-import { motion } from "motion/react"
-import { cn } from "../../../../lib/utils"
 // Desktop uses mock data instead of trpc
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyFn = (...args: any[]) => any
@@ -99,11 +110,7 @@ type AuthFlowState =
   | { step: "error"; message: string }
 
 export function AgentsProfileTab() {
-  const {
-    clerkUser: user,
-    user: dbUser,
-    isLoading: isUserLoading,
-  } = useUserProfile()
+  const { user, setUser, isLoading: isUserLoading } = useDesktopUserProfile()
   const [fullName, setFullName] = useState("")
   const [profileImage, setProfileImage] = useState("")
   const [isSaving, setIsSaving] = useState(false)
@@ -113,11 +120,11 @@ export function AgentsProfileTab() {
 
   // Initialize state when user data is loaded
   useEffect(() => {
-    if (!isUserLoading && (dbUser || user)) {
-      setFullName(dbUser?.display_name || user?.fullName || "")
-      setProfileImage(dbUser?.display_image_url || user?.imageUrl || "")
+    if (!isUserLoading && user) {
+      setFullName(user.name || "")
+      setProfileImage(user.imageUrl || "")
     }
-  }, [isUserLoading, dbUser, user])
+  }, [isUserLoading, user])
 
   // Update profileImage when previewUrl changes
   useEffect(() => {
@@ -130,23 +137,15 @@ export function AgentsProfileTab() {
     setIsSaving(true)
 
     try {
-      const response = await fetch("/api/user/profile", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          display_name: fullName || null,
-          display_image_url: profileImage || null,
-        }),
-      })
-
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || "Failed to update profile")
+      if (window.desktopApi?.updateUser) {
+        const updatedUser = await window.desktopApi.updateUser({ name: fullName })
+        if (updatedUser) {
+          setUser(updatedUser)
+          toast.success("Profile updated successfully")
+        }
+      } else {
+        throw new Error("Desktop API not available")
       }
-
-      toast.success("Profile updated successfully")
     } catch (error) {
       console.error("Error updating profile:", error)
       toast.error(
@@ -382,8 +381,7 @@ export function AgentsProfileTab() {
     )
   }
 
-  const currentImageUrl =
-    previewUrl || profileImage || dbUser?.display_image_url || user?.imageUrl
+  const currentImageUrl = previewUrl || profileImage || user?.imageUrl
 
   return (
     <div className="p-6 space-y-6">

@@ -37,9 +37,23 @@ interface AgentSubChatStore {
 const getStorageKey = (chatId: string, type: "open" | "active" | "pinned") =>
   `agent-${type}-sub-chats-${chatId}`
 
+// Custom event for notifying other components when open sub-chats change
+export const OPEN_SUB_CHATS_CHANGE_EVENT = "open-sub-chats-change"
+
+// Debounce timer to avoid rapid-fire events
+let openSubChatsChangeTimer: ReturnType<typeof setTimeout> | null = null
+
 const saveToLS = (chatId: string, type: "open" | "active" | "pinned", value: unknown) => {
   if (typeof window === "undefined") return
   localStorage.setItem(getStorageKey(chatId, type), JSON.stringify(value))
+  // Dispatch debounced event when open sub-chats change so sidebar can update
+  if (type === "open") {
+    if (openSubChatsChangeTimer) clearTimeout(openSubChatsChangeTimer)
+    openSubChatsChangeTimer = setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(OPEN_SUB_CHATS_CHANGE_EVENT))
+      openSubChatsChangeTimer = null
+    }, 50)
+  }
 }
 
 const loadFromLS = <T>(chatId: string, type: "open" | "active" | "pinned", fallback: T): T => {

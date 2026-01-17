@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react"
 import { Provider as JotaiProvider, useAtomValue } from "jotai"
-import { ThemeProvider } from "next-themes"
+import { ThemeProvider, useTheme } from "next-themes"
+import { Toaster } from "sonner"
 import { TRPCProvider } from "./contexts/TRPCProvider"
 import { AgentsLayout } from "./features/layout/agents-layout"
 import {
@@ -14,6 +15,21 @@ import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { anthropicOnboardingCompletedAtom } from "./lib/atoms"
 import { selectedProjectAtom } from "./features/agents/atoms"
 import { trpc } from "./lib/trpc"
+
+/**
+ * Custom Toaster that adapts to theme
+ */
+function ThemedToaster() {
+  const { resolvedTheme } = useTheme()
+
+  return (
+    <Toaster
+      position="bottom-right"
+      theme={resolvedTheme as "light" | "dark" | "system"}
+      closeButton
+    />
+  )
+}
 
 /**
  * Main content router - decides which page to show based on onboarding state
@@ -102,6 +118,7 @@ export function App() {
               >
                 <AppContent />
               </div>
+              <ThemedToaster />
             </TRPCProvider>
           </TooltipProvider>
         </VSCodeThemeProvider>

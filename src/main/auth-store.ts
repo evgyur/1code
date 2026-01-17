@@ -187,4 +187,16 @@ export class AuthStore {
     const fiveMinutes = 5 * 60 * 1000
     return expiresAt - Date.now() < fiveMinutes
   }
+
+  /**
+   * Update user data (e.g., after profile update)
+   */
+  updateUser(updates: Partial<AuthUser>): AuthUser | null {
+    const data = this.load()
+    if (!data) return null
+
+    data.user = { ...data.user, ...updates }
+    this.save(data)
+    return data.user
+  }
 }

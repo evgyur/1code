@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSetAtom } from "jotai"
-import { subChatFilesAtom, type SubChatFileChange } from "../atoms"
+import { subChatFilesAtom, subChatToChatMapAtom, type SubChatFileChange } from "../atoms"
 // import { REPO_ROOT_PATH } from "@/lib/codesandbox-constants"
 const REPO_ROOT_PATH = "/workspace" // Desktop mock
 
@@ -28,8 +28,10 @@ export function useChangedFilesTracking(
   messages: Message[],
   subChatId: string,
   isStreaming: boolean = false,
+  chatId?: string,
 ) {
   const setSubChatFiles = useSetAtom(subChatFilesAtom)
+  const setSubChatToChatMap = useSetAtom(subChatToChatMapAtom)
 
   // Helper to get display path (removes sandbox prefixes)
   const getDisplayPath = useCallback((filePath: string): string => {
@@ -89,6 +91,15 @@ export function useChangedFilesTracking(
   const wasStreamingRef = useRef(false)
   const isInitializedRef = useRef(false)
 
+  // Check if a file path is a session/plan file that should be excluded
+  const isSessionFile = useCallback((filePath: string): boolean => {
+    // Exclude files in claude-sessions (plan files stored in app's local storage)
+    if (filePath.includes("claude-sessions")) return true
+    // Exclude files in Application Support directory
+    if (filePath.includes("Application Support")) return true
+    return false
+  }, [])
+
   // Calculate changed files from messages
   const calculateChangedFiles = useCallback(() => {
     // Track file states: originalContent (first old_string) and currentContent (latest new_string)
@@ -107,6 +118,9 @@ export function useChangedFilesTracking(
         if (part.type === "tool-Edit" || part.type === "tool-Write") {
           const filePath = part.input?.file_path
           if (!filePath) continue
+
+          // Skip session/plan files stored in local app storage
+          if (isSessionFile(filePath)) continue
 
           const oldString = part.input?.old_string || ""
           const newString = part.input?.new_string || part.input?.content || ""
@@ -148,7 +162,7 @@ export function useChangedFilesTracking(
     }
 
     return result
-  }, [messages, getDisplayPath, calculateDiffStats])
+  }, [messages, getDisplayPath, calculateDiffStats, isSessionFile])
 
   // Only recalculate when streaming ends (transition from true to false)
   // Also calculate on initial mount if not streaming
@@ -177,6 +191,17 @@ export function useChangedFilesTracking(
       return next
     })
   }, [subChatId, changedFiles, setSubChatFiles])
+
+  // Update subChatId -> chatId mapping for aggregation in workspace sidebar
+  useEffect(() => {
+    if (chatId) {
+      setSubChatToChatMap((prev) => {
+        const next = new Map(prev)
+        next.set(subChatId, chatId)
+        return next
+      })
+    }
+  }, [subChatId, chatId, setSubChatToChatMap])
 
   return { changedFiles }
 }

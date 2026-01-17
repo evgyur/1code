@@ -56,10 +56,13 @@ if (app.isPackaged && !IS_DEV) {
 }
 
 // URL configuration (exported for use in other modules)
+// In packaged app, ALWAYS use production URL to prevent localhost leaking into releases
+// In dev mode, allow override via MAIN_VITE_API_URL env variable
 export function getBaseUrl(): string {
-  return process.env.ELECTRON_RENDERER_URL
-    ? "http://localhost:3000"
-    : "https://21st.dev"
+  if (app.isPackaged) {
+    return "https://21st.dev"
+  }
+  return import.meta.env.MAIN_VITE_API_URL || "https://21st.dev"
 }
 
 export function getAppUrl(): string {
@@ -487,10 +490,10 @@ if (gotTheLock) {
           label: "File",
           submenu: [
             {
-              label: "New Agent",
+              label: "New Chat",
               accelerator: "CmdOrCtrl+N",
               click: () => {
-                console.log("[Menu] New Agent clicked (Cmd+N)")
+                console.log("[Menu] New Chat clicked (Cmd+N)")
                 const win = getWindow()
                 if (win) {
                   console.log("[Menu] Sending shortcut:new-agent to renderer")

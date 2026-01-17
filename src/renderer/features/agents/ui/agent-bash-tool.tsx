@@ -146,24 +146,11 @@ export const AgentBashTool = memo(function AgentBashTool({
               }}
               className="p-1 rounded-md hover:bg-accent transition-[background-color,transform] duration-150 ease-out active:scale-95"
             >
-              <div className="relative w-4 h-4">
-                <ExpandIcon
-                  className={cn(
-                    "absolute inset-0 w-4 h-4 text-muted-foreground transition-[opacity,transform] duration-200 ease-out",
-                    isOutputExpanded
-                      ? "opacity-0 scale-75"
-                      : "opacity-100 scale-100",
-                  )}
-                />
-                <CollapseIcon
-                  className={cn(
-                    "absolute inset-0 w-4 h-4 text-muted-foreground transition-[opacity,transform] duration-200 ease-out",
-                    isOutputExpanded
-                      ? "opacity-100 scale-100"
-                      : "opacity-0 scale-75",
-                  )}
-                />
-              </div>
+              {isOutputExpanded ? (
+                <CollapseIcon className="w-4 h-4 text-muted-foreground" />
+              ) : (
+                <ExpandIcon className="w-4 h-4 text-muted-foreground" />
+              )}
             </button>
           )}
         </div>

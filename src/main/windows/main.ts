@@ -179,6 +179,16 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
     }
     await handleAuthCode(code)
   })
+
+  ipcMain.handle("auth:update-user", async (event, updates: { name?: string }) => {
+    if (!validateSender(event)) return null
+    try {
+      return await getAuthManager().updateUser(updates)
+    } catch (error) {
+      console.error("[Auth] Failed to update user:", error)
+      throw error
+    }
+  })
 }
 
 // Current window reference

@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "motion/react"
 import { Button } from "../../../components/ui/button"
 import { cn } from "../../../lib/utils"
 import { trpc } from "../../../lib/trpc"
+import { useFileChangeListener } from "../../../lib/hooks/use-file-change-listener"
 import { getFileIconByExtension } from "../mentions/agents-file-mention"
 import {
   diffSidebarOpenAtomFamily,
@@ -32,6 +33,7 @@ function AnimatedDots() {
 interface SubChatStatusCardProps {
   chatId: string // Parent chat ID for per-chat diff sidebar state
   isStreaming: boolean
+  isCompacting?: boolean
   changedFiles: SubChatFileChange[]
   worktreePath?: string | null // For git status check to hide committed files
   onStop?: () => void
@@ -40,6 +42,7 @@ interface SubChatStatusCardProps {
 export const SubChatStatusCard = memo(function SubChatStatusCard({
   chatId,
   isStreaming,
+  isCompacting,
   changedFiles,
   worktreePath,
   onStop,
@@ -54,13 +57,17 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
   const setFilteredDiffFiles = useSetAtom(filteredDiffFilesAtom)
   const setFocusedDiffFile = useSetAtom(agentsFocusedDiffFileAtom)
 
+  // Listen for file changes from Claude Write/Edit tools
+  useFileChangeListener(worktreePath)
+
   // Fetch git status to filter out committed files
   const { data: gitStatus } = trpc.changes.getStatus.useQuery(
     { worktreePath: worktreePath || "", defaultBranch: "main" },
     {
       enabled: !!worktreePath && changedFiles.length > 0 && !isStreaming,
-      refetchInterval: 3000,
-      staleTime: 1000,
+      // No polling - updates triggered by file-changed events from Claude tools
+      staleTime: 30000,
+      placeholderData: (prev) => prev,
     },
   )
 
@@ -73,14 +80,21 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
 
     // Build set of all uncommitted file paths from git status
     const uncommittedPaths = new Set<string>()
-    for (const file of gitStatus.staged) {
-      uncommittedPaths.add(file.path)
+    // Safely iterate - arrays might be undefined in edge cases
+    if (gitStatus.staged) {
+      for (const file of gitStatus.staged) {
+        uncommittedPaths.add(file.path)
+      }
     }
-    for (const file of gitStatus.unstaged) {
-      uncommittedPaths.add(file.path)
+    if (gitStatus.unstaged) {
+      for (const file of gitStatus.unstaged) {
+        uncommittedPaths.add(file.path)
+      }
     }
-    for (const file of gitStatus.untracked) {
-      uncommittedPaths.add(file.path)
+    if (gitStatus.untracked) {
+      for (const file of gitStatus.untracked) {
+        uncommittedPaths.add(file.path)
+      }
     }
 
     // Filter changedFiles to only include files that are still uncommitted
@@ -212,7 +226,7 @@ export const SubChatStatusCard = memo(function SubChatStatusCard({
           {/* Streaming indicator */}
           {isStreaming && uncommittedFiles.length === 0 && (
             <span className="text-xs text-muted-foreground">
-              Generating<AnimatedDots />
+              {isCompacting ? "Compacting" : "Generating"}<AnimatedDots />
             </span>
           )}
 
