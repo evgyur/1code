@@ -123,6 +123,14 @@
     "appId": "dev.21st.agents",
     "productName": "1Code",
     "npmRebuild": true,
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "sign": null,
+      "executableName": "1Code"
+    },
     "protocols": [
       {
         "name": "1Code",
@@ -207,10 +215,11 @@
     },
     "win": {
       "target": [
-        "nsis",
         "portable"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "sign": null,
+      "executableName": "1Code"
     },
     "linux": {
       "target": [

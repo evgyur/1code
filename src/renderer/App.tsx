@@ -108,7 +108,13 @@ export function App() {
 
   return (
     <JotaiProvider store={appStore}>
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+      <ThemeProvider 
+        attribute="class" 
+        defaultTheme="system" 
+        enableSystem
+        storageKey="1code-theme"
+        disableTransitionOnChange={false}
+      >
         <VSCodeThemeProvider>
           <TooltipProvider delayDuration={100}>
             <TRPCProvider>
