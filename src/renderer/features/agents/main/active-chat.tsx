@@ -850,8 +850,8 @@ function ChatViewInner({
   // Scroll management state (like canvas chat)
   // Using only ref to avoid re-renders on scroll
   const shouldAutoScrollRef = useRef(true)
+  const isAutoScrollingRef = useRef(false) // Flag to ignore scroll events caused by auto-scroll
   const chatContainerRef = useRef<HTMLElement | null>(null)
-  const lastScrollUpdateRef = useRef<number>(0)
   const editorRef = useRef<AgentsMentionsEditorHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const prevChatKeyRef = useRef<string | null>(null)
@@ -904,23 +904,35 @@ function ChatViewInner({
   // Track last assistant message ID for smart scroll restoration
   const lastAssistantMsgIdRef = useRef<string | undefined>(undefined)
 
-  // Handle scroll events to detect user scrolling (throttled)
+  // Track previous scroll position to detect scroll direction
+  const prevScrollTopRef = useRef(0)
+
+  // Handle scroll events to detect user scrolling
   // Updates shouldAutoScrollRef and tracks position in ref for cleanup
   // Using refs only to avoid re-renders on scroll
   const handleScroll = useCallback(() => {
     const container = chatContainerRef.current
     if (!container) return
 
+    const currentScrollTop = container.scrollTop
+    const prevScrollTop = prevScrollTopRef.current
+    prevScrollTopRef.current = currentScrollTop
+
     // Always track current position (for cleanup to use)
-    currentScrollTopRef.current = container.scrollTop
+    currentScrollTopRef.current = currentScrollTop
     currentScrollHeightRef.current = container.scrollHeight
 
-    // Throttle ref updates (no state, no re-renders)
-    const now = Date.now()
-    if (now - lastScrollUpdateRef.current > 100) {
-      lastScrollUpdateRef.current = now
-      shouldAutoScrollRef.current = isAtBottom()
+    // Ignore scroll events caused by auto-scroll - only react to user scrolling
+    if (isAutoScrollingRef.current) return
+
+    // If user scrolls UP - disable auto-scroll immediately (no threshold!)
+    if (currentScrollTop < prevScrollTop) {
+      shouldAutoScrollRef.current = false
+      return
     }
+
+    // If user scrolls DOWN and reaches bottom - enable auto-scroll
+    shouldAutoScrollRef.current = isAtBottom()
   }, [isAtBottom])
 
   // tRPC utils for cache invalidation
@@ -1829,12 +1841,20 @@ function ChatViewInner({
     // Skip if scroll restoration is still in progress (ResizeObserver may still be working)
     if (!scrollRestoredRef.current) return
 
-    // Only auto-scroll during active streaming when user is at bottom
+    // Auto-scroll during streaming if user hasn't scrolled up
+    // shouldAutoScrollRef is set to false when user scrolls UP (see handleScroll)
+    // No need to check isAtBottom() here - if shouldAutoScrollRef is true, we follow the stream
     if (shouldAutoScrollRef.current && status === "streaming") {
       const container = chatContainerRef.current
       if (container) {
         requestAnimationFrame(() => {
+          // Set flag to ignore the scroll event this will trigger
+          isAutoScrollingRef.current = true
           container.scrollTop = container.scrollHeight
+          // Reset flag after scroll event has been processed
+          requestAnimationFrame(() => {
+            isAutoScrollingRef.current = false
+          })
         })
       }
     }

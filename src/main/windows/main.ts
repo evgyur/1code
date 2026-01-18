@@ -21,6 +21,7 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
 
   // App info
   ipcMain.handle("app:version", () => app.getVersion())
+  ipcMain.handle("app:isPackaged", () => app.isPackaged)
   // Note: Update checking is now handled by auto-updater module (lib/auto-updater.ts)
   ipcMain.handle("app:set-badge", (_event, count: number | null) => {
     if (process.platform === "darwin") {
