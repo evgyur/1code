@@ -4,6 +4,7 @@ import {
   ChatMarkdownRenderer,
   stripEmojis,
 } from "../../../components/chat-markdown-renderer"
+import { MemoizedTextPart } from "./memoized-text-part"
 import { Button } from "../../../components/ui/button"
 import {
   DropdownMenu,
@@ -170,8 +171,12 @@ import { AgentUserQuestion } from "../ui/agent-user-question"
 import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
 import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
 import { AgentsHeaderControls } from "../ui/agents-header-controls"
+import { ChatInputArea } from "./chat-input-area"
+import { MemoizedAssistantMessages } from "./messages-list"
+import { ChatDataSync } from "./chat-data-sync"
+import { IsolatedMessagesSection } from "./isolated-messages-section"
+import { hasMessagesAtom, isStreamingAtom, hasUnapprovedPlanAtom, messageTokenDataAtom, syncMessagesWithStatusAtom } from "../stores/message-store"
 import { ChatTitleEditor } from "../ui/chat-title-editor"
-import { McpServersIndicator } from "../ui/mcp-servers-indicator"
 import { MobileChatHeader } from "../ui/mobile-chat-header"
 import { PrStatusBar } from "../ui/pr-status-bar"
 import { SubChatSelector } from "../ui/sub-chat-selector"
@@ -844,18 +849,14 @@ function ChatViewInner({
   isArchived?: boolean
   onRestoreWorkspace?: () => void
 }) {
-  // UNCONTROLLED: just track if editor has content for send button
-  const [hasContent, setHasContent] = useState(false)
-  const [isDragOver, setIsDragOver] = useState(false)
-  const [isFocused, setIsFocused] = useState(false)
   const hasTriggeredRenameRef = useRef(false)
   const hasTriggeredAutoGenerateRef = useRef(false)
 
   // Scroll management state (like canvas chat)
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true)
-  const shouldAutoScrollRef = useRef(true) // Ref to read current value without triggering effect
+  // Using only ref to avoid re-renders on scroll
+  const shouldAutoScrollRef = useRef(true)
+  const isAutoScrollingRef = useRef(false) // Flag to ignore scroll events caused by auto-scroll
   const chatContainerRef = useRef<HTMLElement | null>(null)
-  const lastScrollUpdateRef = useRef<number>(0)
   const editorRef = useRef<AgentsMentionsEditorHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const prevChatKeyRef = useRef<string | null>(null)
@@ -908,24 +909,35 @@ function ChatViewInner({
   // Track last assistant message ID for smart scroll restoration
   const lastAssistantMsgIdRef = useRef<string | undefined>(undefined)
 
-  // Handle scroll events to detect user scrolling (throttled)
-  // Updates shouldAutoScroll and tracks position in ref for cleanup
+  // Track previous scroll position to detect scroll direction
+  const prevScrollTopRef = useRef(0)
+
+  // Handle scroll events to detect user scrolling
+  // Updates shouldAutoScrollRef and tracks position in ref for cleanup
+  // Using refs only to avoid re-renders on scroll
   const handleScroll = useCallback(() => {
     const container = chatContainerRef.current
     if (!container) return
 
+    const currentScrollTop = container.scrollTop
+    const prevScrollTop = prevScrollTopRef.current
+    prevScrollTopRef.current = currentScrollTop
+
     // Always track current position (for cleanup to use)
-    currentScrollTopRef.current = container.scrollTop
+    currentScrollTopRef.current = currentScrollTop
     currentScrollHeightRef.current = container.scrollHeight
 
-    // Throttle state updates to reduce re-renders
-    const now = Date.now()
-    if (now - lastScrollUpdateRef.current > 100) {
-      lastScrollUpdateRef.current = now
-      const newIsAtBottom = isAtBottom()
-      setShouldAutoScroll(newIsAtBottom)
-      shouldAutoScrollRef.current = newIsAtBottom
+    // Ignore scroll events caused by auto-scroll - only react to user scrolling
+    if (isAutoScrollingRef.current) return
+
+    // If user scrolls UP - disable auto-scroll immediately (no threshold!)
+    if (currentScrollTop < prevScrollTop) {
+      shouldAutoScrollRef.current = false
+      return
     }
+
+    // If user scrolls DOWN and reaches bottom - enable auto-scroll
+    shouldAutoScrollRef.current = isAtBottom()
   }, [isAtBottom])
 
   // tRPC utils for cache invalidation
@@ -948,6 +960,12 @@ function ChatViewInner({
   })
 
   // Handler for renaming sub-chat
+  // Using ref for mutation to avoid callback recreation
+  const renameSubChatMutationRef = useRef(renameSubChatMutation)
+  renameSubChatMutationRef.current = renameSubChatMutation
+  const subChatNameRef = useRef(subChatName)
+  subChatNameRef.current = subChatName
+
   const handleRenameSubChat = useCallback(
     async (newName: string) => {
       // Optimistic update in store
@@ -955,7 +973,7 @@ function ChatViewInner({
 
       // Save to database
       try {
-        await renameSubChatMutation.mutateAsync({
+        await renameSubChatMutationRef.current.mutateAsync({
           subChatId,
           name: newName,
         })
@@ -963,10 +981,10 @@ function ChatViewInner({
         // Revert on error (toast shown by mutation onError)
         useAgentSubChatStore
           .getState()
-          .updateSubChatName(subChatId, subChatName || "New Chat")
+          .updateSubChatName(subChatId, subChatNameRef.current || "New Chat")
       }
     },
-    [subChatId, subChatName, renameSubChatMutation],
+    [subChatId],
   )
 
   // Plan mode state (read from global atom)
@@ -1048,18 +1066,6 @@ function ChatViewInner({
     // Dependencies: updateSubChatModeMutation.mutate is stable, useAgentSubChatStore is external
   }, [isPlanMode, subChatId, updateSubChatModeMutation.mutate])
 
-  // Model selection state
-  const [lastSelectedModelId, setLastSelectedModelId] = useAtom(
-    lastSelectedModelIdAtom,
-  )
-  const [selectedAgent, setSelectedAgent] = useState(() => agents[0])
-  const [selectedModel, setSelectedModel] = useState(
-    () =>
-      claudeModels.find((m) => m.id === lastSelectedModelId) || claudeModels[1],
-  )
-  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
-  const [shouldOpenClaudeSubmenu, setShouldOpenClaudeSubmenu] = useState(false)
-
   // File/image upload hook
   const {
     images,
@@ -1071,52 +1077,10 @@ function ChatViewInner({
     isUploading,
   } = useAgentsFileUpload()
 
-  // Mention dropdown state
-  const [showMentionDropdown, setShowMentionDropdown] = useState(false)
-  const [mentionSearchText, setMentionSearchText] = useState("")
-  const [mentionPosition, setMentionPosition] = useState({ top: 0, left: 0 })
-
-  // Mention dropdown subpage navigation state
-  const [showingFilesList, setShowingFilesList] = useState(false)
-  const [showingSkillsList, setShowingSkillsList] = useState(false)
-  const [showingAgentsList, setShowingAgentsList] = useState(false)
-  const [showingToolsList, setShowingToolsList] = useState(false)
-
-  // Slash command dropdown state
-  const [showSlashDropdown, setShowSlashDropdown] = useState(false)
-  const [slashSearchText, setSlashSearchText] = useState("")
-  const [slashPosition, setSlashPosition] = useState({ top: 0, left: 0 })
-
-  // Shift+Tab handler for mode switching (now handled inside input component)
-
-  // Keyboard shortcut: Cmd+/ to open model selector (Claude submenu)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key === "/") {
-        e.preventDefault()
-        e.stopPropagation()
-
-        setShouldOpenClaudeSubmenu(true)
-        setIsModelDropdownOpen(true)
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown, true)
-    return () => window.removeEventListener("keydown", handleKeyDown, true)
-  }, [])
-
-  // Mode tooltip state (floating tooltip like canvas)
-  const [modeTooltip, setModeTooltip] = useState<{
-    visible: boolean
-    position: { top: number; left: number }
-    mode: "agent" | "plan"
-  } | null>(null)
+  // Plan approval pending state (for tool approval loading)
   const [planApprovalPending, setPlanApprovalPending] = useState<
     Record<string, boolean>
   >({})
-  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const hasShownTooltipRef = useRef(false)
-  const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
 
   // Track chat changes for rename trigger reset
   const chatRef = useRef<Chat<any> | null>(null)
@@ -1128,83 +1092,16 @@ function ChatViewInner({
   }
   chatRef.current = chat
 
-  // Save/restore drafts when switching between sub-chats or workspaces
-  // Use refs to capture current values for cleanup function
-  const currentSubChatIdRef = useRef<string>(subChatId)
-  const currentChatIdRef = useRef<string | null>(parentChatId)
-  const currentDraftTextRef = useRef<string>("")
-  currentSubChatIdRef.current = subChatId
-  currentChatIdRef.current = parentChatId
-
-  // Save draft on blur (when focus leaves editor) - updates ref and localStorage
-  const handleEditorBlur = useCallback(() => {
-    setIsFocused(false)
-
-    const draft = editorRef.current?.getValue() || ""
-    const chatId = currentChatIdRef.current
-    const subChatIdValue = currentSubChatIdRef.current
-
-    // Update ref for unmount save
-    currentDraftTextRef.current = draft
-
-    if (!chatId) return
-
-    if (draft.trim()) {
-      saveSubChatDraft(chatId, subChatIdValue, draft)
-    } else {
-      clearSubChatDraft(chatId, subChatIdValue)
-    }
-  }, [])
-
-  // Sync draft ref on every content change so unmount cleanup has fresh value
-  // (editorRef is null during unmount, so we need to keep ref in sync)
-  const handleContentChange = useCallback((hasContent: boolean) => {
-    setHasContent(hasContent)
-    // Sync the draft text ref for unmount save
-    const draft = editorRef.current?.getValue() || ""
-    currentDraftTextRef.current = draft
-  }, [])
-
-  // Save draft on unmount (when switching workspaces)
-  // Read directly from editor first (handles hotkey switch where blur didn't fire),
-  // fall back to ref if editor is already gone
-  useEffect(() => {
-    return () => {
-      const editorValue = editorRef.current?.getValue()
-      const refValue = currentDraftTextRef.current
-      const draft = editorValue || refValue
-      const chatId = currentChatIdRef.current
-      const subChatIdValue = currentSubChatIdRef.current
-
-      if (!chatId || !draft?.trim()) return
-
-      saveSubChatDraft(chatId, subChatIdValue, draft)
-    }
-  }, [])
-
   // Restore draft when subChatId changes (switching between sub-chats)
   const prevSubChatIdForDraftRef = useRef<string | null>(null)
   useEffect(() => {
-    // Save draft from previous sub-chat before switching (within same workspace)
-    if (prevSubChatIdForDraftRef.current && prevSubChatIdForDraftRef.current !== subChatId) {
-      const prevChatId = currentChatIdRef.current
-      const prevSubChatId = prevSubChatIdForDraftRef.current
-      const prevDraft = editorRef.current?.getValue() || ""
-
-      if (prevDraft.trim() && prevChatId) {
-        saveSubChatDraft(prevChatId, prevSubChatId, prevDraft)
-      }
-    }
-
     // Restore draft for new sub-chat - read directly from localStorage
     const savedDraft = parentChatId ? getSubChatDraft(parentChatId, subChatId) : null
 
     if (savedDraft) {
       editorRef.current?.setValue(savedDraft)
-      currentDraftTextRef.current = savedDraft
     } else if (prevSubChatIdForDraftRef.current && prevSubChatIdForDraftRef.current !== subChatId) {
       editorRef.current?.clear()
-      currentDraftTextRef.current = ""
     }
 
     prevSubChatIdForDraftRef.current = subChatId
@@ -1216,8 +1113,14 @@ function ChatViewInner({
     id: subChatId,
     chat,
     resume: !!streamId,
-    // experimental_throttle: 200,
+    experimental_throttle: 50,  // Throttle updates to reduce re-renders during streaming
   })
+
+  // Refs for useChat functions to keep callbacks stable across renders
+  const sendMessageRef = useRef(sendMessage)
+  sendMessageRef.current = sendMessage
+  const stopRef = useRef(stop)
+  stopRef.current = stop
 
   // Stream debug: log status changes and scroll to plan/response start when streaming finishes
   const prevStatusRef = useRef(status)
@@ -1227,8 +1130,6 @@ function ChatViewInner({
     const streamingJustFinished = wasStreaming && nowFinished
 
     if (prevStatusRef.current !== status) {
-      const subId = subChatId.slice(-8)
-      console.log(`[SD] C:STATUS sub=${subId} ${prevStatusRef.current} → ${status} msgs=${messages.length}`)
       prevStatusRef.current = status
     }
 
@@ -1256,7 +1157,6 @@ function ChatViewInner({
           container.scrollTop = Math.max(0, scrollPos)
           currentScrollTopRef.current = container.scrollTop
           shouldAutoScrollRef.current = false
-          setShouldAutoScroll(false)
         }
       })
     }
@@ -1269,13 +1169,29 @@ function ChatViewInner({
   const isCompacting = compactingSubChats.has(subChatId)
 
   // Handler to trigger manual context compaction
+  // Ref for isStreaming to keep handleCompact stable
+  const isStreamingRef = useRef(isStreaming)
+  isStreamingRef.current = isStreaming
+
   const handleCompact = useCallback(() => {
-    if (isStreaming) return // Can't compact while streaming
-    sendMessage({
+    if (isStreamingRef.current) return // Can't compact while streaming
+    sendMessageRef.current({
       role: "user",
       parts: [{ type: "text", text: "/compact" }],
     })
-  }, [isStreaming, sendMessage])
+  }, [])
+
+  // Handler to stop streaming - memoized to prevent ChatInputArea re-renders
+  const handleStop = useCallback(async () => {
+    // Mark as manually aborted to prevent completion sound
+    agentChatStore.setManuallyAborted(subChatId, true)
+    await stopRef.current()
+    // Call DELETE endpoint to cancel server-side stream
+    await fetch(
+      `/api/agents/chat?id=${encodeURIComponent(subChatId)}`,
+      { method: "DELETE", credentials: "include" },
+    )
+  }, [subChatId])
 
   // Keep refs updated for scroll save cleanup to use
   useEffect(() => {
@@ -1345,6 +1261,22 @@ function ChatViewInner({
     () => messages.findLast((m) => m.role === "assistant"),
     [messages],
   )
+
+  // Pre-compute token data for ChatInputArea to avoid passing unstable messages array
+  // This prevents ChatInputArea from re-rendering on every streaming chunk
+  const messageTokenData = useMemo(() => {
+    let totalInputTokens = 0
+    let totalOutputTokens = 0
+    let totalCostUsd = 0
+    for (const msg of messages) {
+      if (msg.metadata) {
+        totalInputTokens += msg.metadata.inputTokens || 0
+        totalOutputTokens += msg.metadata.outputTokens || 0
+        totalCostUsd += msg.metadata.totalCostUsd || 0
+      }
+    }
+    return { totalInputTokens, totalOutputTokens, totalCostUsd, messageCount: messages.length }
+  }, [messages])
 
   // Track previous streaming state to detect stream stop
   const prevIsStreamingRef = useRef(isStreaming)
@@ -1562,11 +1494,11 @@ function ChatViewInner({
     setIsPlanMode(false)
 
     // Send "Implement plan" message (now in agent mode)
-    sendMessage({
+    sendMessageRef.current({
       role: "user",
       parts: [{ type: "text", text: "Implement plan" }],
     })
-  }, [subChatId, setIsPlanMode, sendMessage])
+  }, [subChatId, setIsPlanMode])
 
   // Detect PR URLs in assistant messages and store them
   const detectedPrUrlRef = useRef<string | null>(null)
@@ -1741,25 +1673,28 @@ function ChatViewInner({
     return () => {
       // Save position synchronously before unmount
       const container = chatContainerRef.current
-      if (container) {
-        const wasStreaming =
-          currentStatusRef.current === "streaming" ||
-          currentStatusRef.current === "submitted"
-        const scrollData: ScrollPositionData = {
-          scrollTop: currentScrollTopRef.current,
-          scrollHeight: currentScrollHeightRef.current || container.scrollHeight,
-          messageCount: currentMessageCount,
-          wasStreaming,
-          lastAssistantMsgId: lastAssistantMsgIdRef.current,
-        }
-        // Save to SYNCHRONOUS cache first (for immediate reads on next tab switch)
-        scrollPositionsCacheStore.set(currentSubChatId, scrollData)
-        // Also save to atom for localStorage persistence
-        setScrollPositions((prev) => ({
-          ...prev,
-          [currentSubChatId]: scrollData,
-        }))
+      if (!container) return
+
+      // Don't save position during streaming - will show bottom on return
+      const isCurrentlyStreaming =
+        currentStatusRef.current === "streaming" ||
+        currentStatusRef.current === "submitted"
+      if (isCurrentlyStreaming) return
+
+      const scrollData: ScrollPositionData = {
+        scrollTop: currentScrollTopRef.current,
+        scrollHeight: currentScrollHeightRef.current || container.scrollHeight,
+        messageCount: currentMessageCount,
+        wasStreaming: false,
+        lastAssistantMsgId: lastAssistantMsgIdRef.current,
       }
+      // Save to SYNCHRONOUS cache first (for immediate reads on next tab switch)
+      scrollPositionsCacheStore.set(currentSubChatId, scrollData)
+      // Also save to atom for localStorage persistence
+      setScrollPositions((prev) => ({
+        ...prev,
+        [currentSubChatId]: scrollData,
+      }))
     }
   }, [subChatId, messages.length, setScrollPositions])
 
@@ -1784,13 +1719,18 @@ function ChatViewInner({
       const currentContainer = chatContainerRef.current
       if (!currentContainer) return false
 
+      // During streaming - show bottom by default (user can still scroll freely)
+      if (status === "streaming" || status === "submitted") {
+        currentContainer.scrollTop = currentContainer.scrollHeight
+        currentScrollTopRef.current = currentContainer.scrollHeight
+        shouldAutoScrollRef.current = true
+        scrollRestoredRef.current = true
+        return true
+      }
+
+      // Has saved position data - restore it
       if (savedData !== undefined) {
-        // Validate: only restore if we have similar content
-        // If message count matches and scrollHeight is sufficient, restore position
-        const canRestore =
-          currentContainer.scrollHeight >= savedData.scrollTop &&
-          (messages.length === savedData.messageCount ||
-            currentContainer.scrollHeight >= savedData.scrollHeight * 0.8) // Allow 20% variance
+        const canRestore = currentContainer.scrollHeight >= savedData.scrollTop
 
         if (canRestore) {
           currentContainer.scrollTop = savedData.scrollTop
@@ -1798,77 +1738,40 @@ function ChatViewInner({
           currentScrollHeightRef.current = currentContainer.scrollHeight
           scrollRestoredRef.current = true
           justRestoredRef.current = true
-
-          // Calculate if user WAS at bottom when they LEFT (using saved data, not current DOM)
-          // This is critical because content may have grown while away
-          const clientHeight = currentContainer.clientHeight
-          const wasAtBottomWhenLeft =
-            savedData.scrollTop + clientHeight >= savedData.scrollHeight - 50 // 50px threshold
-
-          const atBottomNow = isAtBottom()
-          setShouldAutoScroll(atBottomNow)
-          shouldAutoScrollRef.current = atBottomNow
-
-          const contentGrew = currentContainer.scrollHeight > savedData.scrollHeight
-          const newMessagesAdded = messages.length > savedData.messageCount
-          const streamingFinished = savedData.wasStreaming && status !== "streaming" && status !== "submitted"
-
-          // SMART SCROLL: If was at bottom, streaming finished, and new content arrived
-          if (wasAtBottomWhenLeft && streamingFinished && (contentGrew || newMessagesAdded)) {
-            requestAnimationFrame(() => {
-              // Find the last assistant message element
-              const allAssistantEls = currentContainer.querySelectorAll("[data-assistant-message-id]")
-              const lastAssistantElement = allAssistantEls[allAssistantEls.length - 1]
-
-              // Check if it has a collapsed steps section OR a plan section
-              // These indicate there's substantial content worth scrolling to the start
-              const hasCollapsedSection = lastAssistantElement?.querySelector("[data-collapsible-steps]")
-              const hasPlanSection = lastAssistantElement?.querySelector("[data-plan-section]")
-
-              if (hasCollapsedSection || hasPlanSection) {
-                // Has collapsed section or plan - scroll to start of this response
-                const rect = lastAssistantElement.getBoundingClientRect()
-                const containerRect = currentContainer.getBoundingClientRect()
-                const scrollPos =
-                  currentContainer.scrollTop + (rect.top - containerRect.top) - 120 // 120px padding to clear user message shadow
-                currentContainer.scrollTop = Math.max(0, scrollPos)
-                currentScrollTopRef.current = currentContainer.scrollTop
-                shouldAutoScrollRef.current = false
-                setShouldAutoScroll(false)
-              } else {
-                // No collapsed section and no plan - just scroll to bottom
-                currentContainer.scrollTop = currentContainer.scrollHeight
-                currentScrollTopRef.current = currentContainer.scrollHeight
-                shouldAutoScrollRef.current = false
-                setShouldAutoScroll(false)
-              }
-            })
-            return true
-          }
-
-          // If still streaming and was at bottom, scroll to actual bottom (follow the stream)
-          if (wasAtBottomWhenLeft && contentGrew && (status === "streaming" || status === "submitted")) {
-            requestAnimationFrame(() => {
-              currentContainer.scrollTop = currentContainer.scrollHeight
-              currentScrollTopRef.current = currentContainer.scrollHeight
-              shouldAutoScrollRef.current = true
-              setShouldAutoScroll(true)
-            })
-          }
+          shouldAutoScrollRef.current = isAtBottom()
           return true
         }
       } else if (currentContainer.scrollHeight > currentContainer.clientHeight) {
-        // First time opening this sub-chat with content - scroll to bottom
+        // No saved position but has content - check for Response/Plan block to scroll to
+        const allAssistantEls = currentContainer.querySelectorAll("[data-assistant-message-id]")
+        const lastAssistantElement = allAssistantEls[allAssistantEls.length - 1]
+
+        if (lastAssistantElement) {
+          const hasCollapsedSection = lastAssistantElement.querySelector("[data-collapsible-steps]")
+          const hasPlanSection = lastAssistantElement.querySelector("[data-plan-section]")
+
+          if (hasCollapsedSection || hasPlanSection) {
+            // Scroll to start of Response/Plan block
+            const rect = lastAssistantElement.getBoundingClientRect()
+            const containerRect = currentContainer.getBoundingClientRect()
+            const scrollPos = currentContainer.scrollTop + (rect.top - containerRect.top) - 120
+            currentContainer.scrollTop = Math.max(0, scrollPos)
+            currentScrollTopRef.current = currentContainer.scrollTop
+            scrollRestoredRef.current = true
+            shouldAutoScrollRef.current = false
+            return true
+          }
+        }
+
+        // No Response/Plan block - scroll to bottom
         currentContainer.scrollTop = currentContainer.scrollHeight
         currentScrollTopRef.current = currentContainer.scrollHeight
         scrollRestoredRef.current = true
-        setShouldAutoScroll(true)
         shouldAutoScrollRef.current = true
         return true
       } else if (messages.length === 0) {
         // Empty chat - mark as restored (nothing to scroll)
         scrollRestoredRef.current = true
-        setShouldAutoScroll(true)
         shouldAutoScrollRef.current = true
         return true
       }
@@ -1943,12 +1846,20 @@ function ChatViewInner({
     // Skip if scroll restoration is still in progress (ResizeObserver may still be working)
     if (!scrollRestoredRef.current) return
 
-    // Only auto-scroll during active streaming when user is at bottom
+    // Auto-scroll during streaming if user hasn't scrolled up
+    // shouldAutoScrollRef is set to false when user scrolls UP (see handleScroll)
+    // No need to check isAtBottom() here - if shouldAutoScrollRef is true, we follow the stream
     if (shouldAutoScrollRef.current && status === "streaming") {
       const container = chatContainerRef.current
       if (container) {
         requestAnimationFrame(() => {
+          // Set flag to ignore the scroll event this will trigger
+          isAutoScrollingRef.current = true
           container.scrollTop = container.scrollHeight
+          // Reset flag after scroll event has been processed
+          requestAnimationFrame(() => {
+            isAutoScrollingRef.current = false
+          })
         })
       }
     }
@@ -1965,7 +1876,17 @@ function ChatViewInner({
     })
   }, [subChatId, isMobile])
 
-  const handleSend = async () => {
+  // Refs for handleSend to avoid recreating callback on every messages change
+  const messagesLengthRef = useRef(messages.length)
+  messagesLengthRef.current = messages.length
+  const isPlanModeRef = useRef(isPlanMode)
+  isPlanModeRef.current = isPlanMode
+  const imagesRef = useRef(images)
+  imagesRef.current = images
+  const filesRef = useRef(files)
+  filesRef.current = files
+
+  const handleSend = useCallback(async () => {
     // Block sending while sandbox is still being set up
     if (sandboxSetupStatus !== "ready") {
       return
@@ -1979,15 +1900,16 @@ function ChatViewInner({
     // Get value from uncontrolled editor
     const inputValue = editorRef.current?.getValue() || ""
     const hasText = inputValue.trim().length > 0
+    const currentImages = imagesRef.current
+    const currentFiles = filesRef.current
     const hasImages =
-      images.filter((img) => !img.isLoading && img.url).length > 0
+      currentImages.filter((img) => !img.isLoading && img.url).length > 0
 
     if (!hasText && !hasImages) return
 
     const text = inputValue.trim()
     // Clear editor and draft from localStorage
     editorRef.current?.clear()
-    currentDraftTextRef.current = ""
     if (parentChatId) {
       clearSubChatDraft(parentChatId, subChatId)
     }
@@ -1996,11 +1918,11 @@ function ChatViewInner({
     trackMessageSent({
       workspaceId: subChatId,
       messageLength: text.length,
-      mode: isPlanMode ? "plan" : "agent",
+      mode: isPlanModeRef.current ? "plan" : "agent",
     })
 
     // Trigger auto-rename on first message in a new sub-chat
-    if (messages.length === 0 && !hasTriggeredRenameRef.current) {
+    if (messagesLengthRef.current === 0 && !hasTriggeredRenameRef.current) {
       hasTriggeredRenameRef.current = true
       onAutoRename(text || "Image message", subChatId)
     }
@@ -2008,7 +1930,7 @@ function ChatViewInner({
     // Build message parts: images first, then files, then text
     // Include base64Data for API transmission
     const parts: any[] = [
-      ...images
+      ...currentImages
         .filter((img) => !img.isLoading && img.url)
         .map((img) => ({
           type: "data-image" as const,
@@ -2019,13 +1941,13 @@ function ChatViewInner({
             base64Data: img.base64Data, // Include base64 data for Claude API
           },
         })),
-      ...files
+      ...currentFiles
         .filter((f) => !f.isLoading && f.url)
         .map((f) => ({
           type: "data-file" as const,
           data: {
             url: f.url,
-            mediaType: f.mediaType,
+            mediaType: (f as any).mediaType,
             filename: f.filename,
             size: f.size,
           },
@@ -2041,14 +1963,14 @@ function ChatViewInner({
     // Optimistic update: immediately update chat's updated_at and resort array for instant sidebar resorting
     if (teamId) {
       const now = new Date()
-      utils.agents.getAgentChats.setData({ teamId }, (old) => {
+      utils.agents.getAgentChats.setData({ teamId }, (old: any) => {
         if (!old) return old
         // Update the timestamp and sort by updated_at descending
-        const updated = old.map((c) =>
+        const updated = old.map((c: any) =>
           c.id === parentChatId ? { ...c, updated_at: now } : c,
         )
         return updated.sort(
-          (a, b) =>
+          (a: any, b: any) =>
             new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
         )
       })
@@ -2092,143 +2014,17 @@ function ChatViewInner({
       })
     }
 
-    await sendMessage({ role: "user", parts })
-  }
-
-  const handleMentionSelect = useCallback((mention: FileMentionOption) => {
-    // Category navigation - enter subpage instead of inserting mention
-    if (mention.type === "category") {
-      if (mention.id === "files") {
-        setShowingFilesList(true)
-        return
-      }
-      if (mention.id === "skills") {
-        setShowingSkillsList(true)
-        return
-      }
-      if (mention.id === "agents") {
-        setShowingAgentsList(true)
-        return
-      }
-      if (mention.id === "tools") {
-        setShowingToolsList(true)
-        return
-      }
-    }
-
-    // Otherwise: insert mention as normal
-    editorRef.current?.insertMention(mention)
-    setShowMentionDropdown(false)
-    // Reset subpage state
-    setShowingFilesList(false)
-    setShowingSkillsList(false)
-    setShowingAgentsList(false)
-    setShowingToolsList(false)
-  }, [])
-
-  // Slash command handlers
-  const handleSlashTrigger = useCallback(
-    ({ searchText, rect }: { searchText: string; rect: DOMRect }) => {
-      setSlashSearchText(searchText)
-      setSlashPosition({ top: rect.top, left: rect.left })
-      setShowSlashDropdown(true)
-    },
-    [],
-  )
-
-  const handleCloseSlashTrigger = useCallback(() => {
-    setShowSlashDropdown(false)
-  }, [])
-
-  const handleSlashSelect = useCallback(
-    (command: SlashCommandOption) => {
-      // Clear the slash command text from editor
-      editorRef.current?.clearSlashCommand()
-      setShowSlashDropdown(false)
-
-      // Handle builtin commands
-      if (command.category === "builtin") {
-        switch (command.name) {
-          case "clear":
-            // Create a new sub-chat (fresh conversation)
-            if (onCreateNewSubChat) {
-              onCreateNewSubChat()
-            }
-            break
-          case "plan":
-            if (!isPlanMode) {
-              setIsPlanMode(true)
-            }
-            break
-          case "agent":
-            if (isPlanMode) {
-              setIsPlanMode(false)
-            }
-            break
-          case "compact":
-            // Trigger context compaction
-            handleCompact()
-            break
-          // Prompt-based commands - auto-send to agent
-          case "review":
-          case "pr-comments":
-          case "release-notes":
-          case "security-review": {
-            const prompt =
-              COMMAND_PROMPTS[command.name as keyof typeof COMMAND_PROMPTS]
-            if (prompt) {
-              editorRef.current?.setValue(prompt)
-              // Auto-send the prompt to agent
-              setTimeout(() => handleSend(), 0)
-            }
-            break
-          }
-        }
-        return
-      }
-
-      // Handle repository commands - auto-send to agent
-      if (command.prompt) {
-        editorRef.current?.setValue(command.prompt)
-        setTimeout(() => handleSend(), 0)
-      }
-    },
-    [isPlanMode, setIsPlanMode, handleSend, onCreateNewSubChat, handleCompact],
-  )
-
-  // Paste handler for images and plain text
-  // Uses async text insertion to prevent UI freeze with large text
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => handlePasteEvent(e, handleAddAttachments),
-    [handleAddAttachments],
-  )
-
-  // Drag/drop handlers
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(true)
-  }, [])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
-  }, [])
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setIsDragOver(false)
-      const droppedFiles = Array.from(e.dataTransfer.files)
-      handleAddAttachments(droppedFiles)
-      // Focus after state update - use double rAF to wait for React render
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          editorRef.current?.focus()
-        })
-      })
-    },
-    [handleAddAttachments],
-  )
+    await sendMessageRef.current({ role: "user", parts })
+  }, [
+    sandboxSetupStatus,
+    isArchived,
+    onRestoreWorkspace,
+    parentChatId,
+    subChatId,
+    onAutoRename,
+    clearAll,
+    teamId,
+  ])
 
   // Helper to get message text content
   const getMessageTextContent = (msg: any): string => {
@@ -2326,38 +2122,18 @@ function ChatViewInner({
     }
   }, [subChatId, setPendingPlanApprovals])
 
-  // Group messages into pairs: [userMsg, ...assistantMsgs]
-  // Each group is a "conversation turn" where user message is sticky within the group
-  const messageGroups = useMemo(() => {
-    const groups: {
-      userMsg: (typeof messages)[0]
-      assistantMsgs: (typeof messages)[0][]
-    }[] = []
-    let currentGroup: {
-      userMsg: (typeof messages)[0]
-      assistantMsgs: (typeof messages)[0][]
-    } | null = null
+  // Compute sticky top class for user messages
+  const stickyTopClass = isMobile
+    ? CHAT_LAYOUT.stickyTopMobile
+    : isSubChatsSidebarOpen
+      ? CHAT_LAYOUT.stickyTopSidebarOpen
+      : CHAT_LAYOUT.stickyTopSidebarClosed
 
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        // Start a new group
-        if (currentGroup) {
-          groups.push(currentGroup)
-        }
-        currentGroup = { userMsg: msg, assistantMsgs: [] }
-      } else if (currentGroup) {
-        // Add assistant message to current group
-        currentGroup.assistantMsgs.push(msg)
-      }
-    }
-
-    // Push the last group
-    if (currentGroup) {
-      groups.push(currentGroup)
-    }
-
-    return groups
-  }, [messages])
+  // Sync messages to Jotai store for isolated rendering
+  const syncMessages = useSetAtom(syncMessagesWithStatusAtom)
+  useLayoutEffect(() => {
+    syncMessages({ messages, status })
+  }, [messages, status, syncMessages])
 
   return (
     <>
@@ -2402,659 +2178,20 @@ function ChatViewInner({
       >
         <div className="px-2 max-w-2xl mx-auto -mb-4 pb-8 space-y-4">
           <div>
-            {/* Render message groups - each group has user message sticky within it */}
-            {messageGroups.map((group, groupIndex) => {
-              const msg = group.userMsg
-              const isLastUserMessage = groupIndex === messageGroups.length - 1
-
-              // User message data
-              const textContent = msg.parts
-                ?.filter((p: any) => p.type === "text")
-                .map((p: any) => p.text)
-                .join("\n")
-
-              const imageParts =
-                msg.parts?.filter((p: any) => p.type === "data-image") || []
-
-              // Show cloning when sandbox is being set up (only for last user message with no responses)
-              const shouldShowCloning =
-                sandboxSetupStatus === "cloning" &&
-                isLastUserMessage &&
-                group.assistantMsgs.length === 0
-
-              // Show setup error if sandbox setup failed
-              const shouldShowSetupError =
-                sandboxSetupStatus === "error" &&
-                isLastUserMessage &&
-                group.assistantMsgs.length === 0
-
-              return (
-                <MessageGroup key={msg.id}>
-                      {/* Attachments - NOT sticky, scroll normally */}
-                      {imageParts.length > 0 && (
-                        <motion.div
-                          className="mb-2 pointer-events-auto"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ duration: 0.1, ease: "easeOut" }}
-                        >
-                          <AgentUserMessageBubble
-                            messageId={msg.id}
-                            textContent=""
-                            imageParts={imageParts}
-                          />
-                        </motion.div>
-                      )}
-                      {/* User message text - sticky WITHIN this group */}
-                      <div
-                        data-user-message-id={msg.id}
-                        className={cn(
-                          "[&>div]:!mb-4 pointer-events-auto",
-                          // Sticky within the group container
-                          // No z-index here to avoid blocking dropdowns/tooltips
-                          "sticky",
-                          isMobile
-                            ? CHAT_LAYOUT.stickyTopMobile
-                            : isSubChatsSidebarOpen
-                              ? CHAT_LAYOUT.stickyTopSidebarOpen
-                              : CHAT_LAYOUT.stickyTopSidebarClosed,
-                        )}
-                      >
-                        <AgentUserMessageBubble
-                          messageId={msg.id}
-                          textContent={textContent || ""}
-                          imageParts={[]}
-                        />
-                        {/* Cloning indicator - shown while sandbox is being set up */}
-                        {shouldShowCloning && (
-                          <div className="mt-4">
-                            <AgentToolCall
-                              icon={AgentToolRegistry["tool-cloning"].icon}
-                              title={AgentToolRegistry["tool-cloning"].title({})}
-                              isPending={true}
-                              isError={false}
-                            />
-                          </div>
-                        )}
-                        {/* Setup error with retry */}
-                        {shouldShowSetupError && (
-                          <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                            <div className="flex items-center gap-2 text-destructive text-sm">
-                              <span>
-                                Failed to set up sandbox
-                                {sandboxSetupError ? `: ${sandboxSetupError}` : ""}
-                              </span>
-                              {onRetrySetup && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={onRetrySetup}
-                                >
-                                  Retry
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Assistant messages in this group */}
-                      {group.assistantMsgs.map((assistantMsg) => {
-                        const isLastMessage =
-                          assistantMsg.id === messages[messages.length - 1]?.id
-
-                    // Assistant message - flat layout, no bubble (like Canvas)
-                    const contentParts =
-                      assistantMsg.parts?.filter(
-                        (p: any) => p.type !== "step-start",
-                      ) || []
-
-                    // Show planning when streaming but no content yet (like Canvas)
-                    // Only show after sandbox is ready
-                    const shouldShowPlanning =
-                      sandboxSetupStatus === "ready" &&
-                      isStreaming &&
-                      isLastMessage &&
-                      contentParts.length === 0
-
-                    // Check if message has text content (for copy button)
-                    const hasTextContent = assistantMsg.parts?.some(
-                      (p: any) => p.type === "text" && p.text?.trim(),
-                    )
-
-                    // Build map of nested tools per parent Task
-                    const nestedToolsMap = new Map<string, any[]>()
-                    const nestedToolIds = new Set<string>()
-                    const taskPartIds = new Set(
-                      (assistantMsg.parts || [])
-                        .filter(
-                          (p: any) => p.type === "tool-Task" && p.toolCallId,
-                        )
-                        .map((p: any) => p.toolCallId),
-                    )
-                    const orphanTaskGroups = new Map<
-                      string,
-                      { parts: any[]; firstToolCallId: string }
-                    >()
-                    const orphanToolCallIds = new Set<string>()
-                    const orphanFirstToolCallIds = new Set<string>()
-
-                    for (const part of assistantMsg.parts || []) {
-                      if (part.toolCallId?.includes(":")) {
-                        const parentId = part.toolCallId.split(":")[0]
-                        if (taskPartIds.has(parentId)) {
-                          if (!nestedToolsMap.has(parentId)) {
-                            nestedToolsMap.set(parentId, [])
-                          }
-                          nestedToolsMap.get(parentId)!.push(part)
-                          nestedToolIds.add(part.toolCallId)
-                        } else {
-                          let group = orphanTaskGroups.get(parentId)
-                          if (!group) {
-                            group = {
-                              parts: [],
-                              firstToolCallId: part.toolCallId,
-                            }
-                            orphanTaskGroups.set(parentId, group)
-                            orphanFirstToolCallIds.add(part.toolCallId)
-                          }
-                          group.parts.push(part)
-                          orphanToolCallIds.add(part.toolCallId)
-                        }
-                      }
-                    }
-
-                    // Get metadata for usage display
-                    const msgMetadata =
-                      assistantMsg.metadata as AgentMessageMetadata
-
-                    // Detect final text by structure: last text part after any tool parts
-                    // This works locally without needing metadata.finalTextId
-                    const allParts = assistantMsg.parts || []
-
-                    // Find the last tool index and last text index
-                    let lastToolIndex = -1
-                    let lastTextIndex = -1
-                    for (let i = 0; i < allParts.length; i++) {
-                      const part = allParts[i]
-                      if (part.type?.startsWith("tool-")) {
-                        lastToolIndex = i
-                      }
-                      if (part.type === "text" && part.text?.trim()) {
-                        lastTextIndex = i
-                      }
-                    }
-
-                    // Final text exists if: there are tools AND the last text comes AFTER the last tool
-                    // For streaming messages, don't show as final until streaming completes
-                    const hasToolsAndFinalText =
-                      lastToolIndex !== -1 && lastTextIndex > lastToolIndex
-
-                    const finalTextIndex = hasToolsAndFinalText
-                      ? lastTextIndex
-                      : -1
-
-                    // Separate parts into steps (before final) and final text
-                    // For non-last messages, show final text even while streaming (they're already complete)
-                    const hasFinalText =
-                      finalTextIndex !== -1 && (!isStreaming || !isLastMessage)
-
-                    // Check if message has a plan (ExitPlanMode tool)
-                    const exitPlanPart = allParts.find(
-                      (p: any) => p.type === "tool-ExitPlanMode",
-                    )
-                    const planText = typeof exitPlanPart?.output?.plan === "string"
-                      ? exitPlanPart.output.plan
-                      : ""
-                    const hasPlan = !!planText
-
-                    // If has plan, treat everything before plan as steps to collapse
-                    const stepParts = hasFinalText
-                      ? (assistantMsg.parts || []).slice(0, finalTextIndex)
-                      : hasPlan
-                        ? allParts.filter((p: any) => p.type !== "tool-ExitPlanMode") // All parts except plan are steps
-                        : []
-                    const finalParts = hasFinalText
-                      ? (assistantMsg.parts || []).slice(finalTextIndex)
-                      : hasPlan
-                        ? [] // Plan is rendered separately, no final parts
-                        : assistantMsg.parts || []
-
-                    // Count visible step items (for the toggle label)
-                    const visibleStepsCount = stepParts.filter((p: any) => {
-                      if (p.type === "step-start") return false
-                      if (p.type === "tool-TaskOutput") return false
-                      if (p.toolCallId && nestedToolIds.has(p.toolCallId))
-                        return false
-                      if (
-                        p.toolCallId &&
-                        orphanToolCallIds.has(p.toolCallId) &&
-                        !orphanFirstToolCallIds.has(p.toolCallId)
-                      )
-                        return false
-                      if (p.type === "text" && !p.text?.trim()) return false
-                      return true
-                    }).length
-
-                    // Helper function to render a single part
-                    const renderPart = (
-                      part: any,
-                      idx: number,
-                      isFinal = false,
-                    ) => {
-                      // Skip step-start parts
-                      if (part.type === "step-start") {
-                        return null
-                      }
-
-                      // Skip TaskOutput - internal tool with meta info not useful for UI
-                      if (part.type === "tool-TaskOutput") {
-                        return null
-                      }
-
-                      if (
-                        part.toolCallId &&
-                        orphanToolCallIds.has(part.toolCallId)
-                      ) {
-                        if (!orphanFirstToolCallIds.has(part.toolCallId)) {
-                          return null
-                        }
-                        const parentId = part.toolCallId.split(":")[0]
-                        const group = orphanTaskGroups.get(parentId)
-                        if (group) {
-                          return (
-                            <AgentTaskTool
-                              key={idx}
-                              part={{
-                                type: "tool-Task",
-                                toolCallId: parentId,
-                                input: {
-                                  subagent_type: "unknown-agent",
-                                  description: "Incomplete task",
-                                },
-                              }}
-                              nestedTools={group.parts}
-                              chatStatus={status}
-                            />
-                          )
-                        }
-                      }
-
-                      // Skip nested tools - they're rendered within their parent Task
-                      if (
-                        part.toolCallId &&
-                        nestedToolIds.has(part.toolCallId)
-                      ) {
-                        return null
-                      }
-
-                      // Exploring group - grouped Read/Grep/Glob tools
-                      // NOTE: isGroupStreaming is calculated in the map() call below
-                      // because we need to know if this is the last element
-                      if (part.type === "exploring-group") {
-                        return null // Handled separately in map with isLast info
-                      }
-
-                      // Text parts - with px-2 like Canvas
-                      if (part.type === "text") {
-                        if (!part.text?.trim()) return null
-                        // Check if this is the final text by comparing index (parts don't have IDs)
-                        const isFinalText = isFinal && idx === finalTextIndex
-
-                        return (
-                          <div
-                            key={idx}
-                            className={cn(
-                              "text-foreground px-2",
-                              // Only show Summary styling if there are steps to collapse
-                              isFinalText &&
-                                visibleStepsCount > 0 &&
-                                "pt-3 border-t border-border/50",
-                            )}
-                          >
-                            {/* Only show Summary label if there are steps to collapse */}
-                            {isFinalText && visibleStepsCount > 0 && (
-                              <div className="text-[12px] uppercase tracking-wider text-muted-foreground/60 font-medium mb-1">
-                                Response
-                              </div>
-                            )}
-                            <ChatMarkdownRenderer
-                              content={part.text}
-                              size="sm"
-                            />
-                          </div>
-                        )
-                      }
-
-                      // Special handling for tool-Task - render with nested tools
-                      if (part.type === "tool-Task") {
-                        const nestedTools =
-                          nestedToolsMap.get(part.toolCallId) || []
-                        return (
-                          <AgentTaskTool
-                            key={idx}
-                            part={part}
-                            nestedTools={nestedTools}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-Bash - render with full command and output
-                      if (part.type === "tool-Bash") {
-                        return (
-                          <AgentBashTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-Thinking - Extended Thinking
-                      if (part.type === "tool-Thinking") {
-                        return (
-                          <AgentThinkingTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-Edit - render with file icon and diff stats
-                      if (part.type === "tool-Edit") {
-                        return (
-                          <AgentEditTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-Write - render with file preview (reuses AgentEditTool)
-                      if (part.type === "tool-Write") {
-                        return (
-                          <AgentEditTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-WebSearch - collapsible results list
-                      if (part.type === "tool-WebSearch") {
-                        return (
-                          <AgentWebSearchCollapsible
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-WebFetch - expandable content preview
-                      if (part.type === "tool-WebFetch") {
-                        return (
-                          <AgentWebFetchTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-PlanWrite - plan with steps
-                      if (part.type === "tool-PlanWrite") {
-                        return (
-                          <AgentPlanTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-ExitPlanMode - show simple indicator inline
-                      // Full plan card is rendered at end of message
-                      if (part.type === "tool-ExitPlanMode") {
-                        const { isPending, isError } = getToolStatus(
-                          part,
-                          status,
-                        )
-                        return (
-                          <AgentToolCall
-                            key={idx}
-                            icon={AgentToolRegistry["tool-ExitPlanMode"].icon}
-                            title={AgentToolRegistry["tool-ExitPlanMode"].title(
-                              part,
-                            )}
-                            isPending={isPending}
-                            isError={isError}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-TodoWrite - todo list with progress
-                      // All todos render inline - sticky behavior is handled by IntersectionObserver
-                      if (part.type === "tool-TodoWrite") {
-                        return (
-                          <AgentTodoTool
-                            key={idx}
-                            part={part}
-                            chatStatus={status}
-                            subChatId={subChatId}
-                          />
-                        )
-                      }
-
-                      // Special handling for tool-AskUserQuestion
-                      if (part.type === "tool-AskUserQuestion") {
-                        const { isPending, isError } = getToolStatus(
-                          part,
-                          status,
-                        )
-                        return (
-                          <AgentAskUserQuestionTool
-                            key={idx}
-                            input={part.input}
-                            result={part.result}
-                            errorText={
-                              (part as any).errorText || (part as any).error
-                            }
-                            state={isPending ? "call" : "result"}
-                            isError={isError}
-                            isStreaming={isStreaming && isLastMessage}
-                            toolCallId={part.toolCallId}
-                          />
-                        )
-                      }
-
-                      // Tool parts - check registry
-                      if (part.type in AgentToolRegistry) {
-                        const meta = AgentToolRegistry[part.type]
-                        const { isPending, isError } = getToolStatus(
-                          part,
-                          status,
-                        )
-                        return (
-                          <AgentToolCall
-                            key={idx}
-                            icon={meta.icon}
-                            title={meta.title(part)}
-                            subtitle={meta.subtitle?.(part)}
-                            isPending={isPending}
-                            isError={isError}
-                          />
-                        )
-                      }
-
-                      // Fallback for unknown tool types
-                      if (part.type?.startsWith("tool-")) {
-                        return (
-                          <div
-                            key={idx}
-                            className="text-xs text-muted-foreground py-0.5 px-2"
-                          >
-                            {part.type.replace("tool-", "")}
-                          </div>
-                        )
-                      }
-
-                      return null
-                    }
-
-                    return (
-                      <motion.div
-                        key={assistantMsg.id}
-                        data-assistant-message-id={assistantMsg.id}
-                        className="group/message w-full mb-4"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ duration: 0.1, ease: "easeOut" }}
-                      >
-                        <div className="flex flex-col gap-1.5">
-                          {/* Collapsible steps section - show when we have final text OR a plan */}
-                          {(hasFinalText || hasPlan) && visibleStepsCount > 0 && (
-                            <CollapsibleSteps stepsCount={visibleStepsCount}>
-                              {(() => {
-                                const grouped = groupExploringTools(
-                                  stepParts,
-                                  nestedToolIds,
-                                )
-                                return grouped.map((part: any, idx: number) => {
-                                  // Handle exploring-group with isLast check
-                                  if (part.type === "exploring-group") {
-                                    const isLast = idx === grouped.length - 1
-                                    const isGroupStreaming =
-                                      isStreaming && isLastMessage && isLast
-                                    return (
-                                      <AgentExploringGroup
-                                        key={idx}
-                                        parts={part.parts}
-                                        chatStatus={status}
-                                        isStreaming={isGroupStreaming}
-                                      />
-                                    )
-                                  }
-                                  return renderPart(part, idx, false)
-                                })
-                              })()}
-                            </CollapsibleSteps>
-                          )}
-
-                          {/* Final parts (or all parts if no final text yet) */}
-                          {(() => {
-                            const grouped = groupExploringTools(
-                              finalParts,
-                              nestedToolIds,
-                            )
-                            return grouped.map((part: any, idx: number) => {
-                              // Handle exploring-group with isLast check
-                              if (part.type === "exploring-group") {
-                                const isLast = idx === grouped.length - 1
-                                const isGroupStreaming =
-                                  isStreaming && isLastMessage && isLast
-                                return (
-                                  <AgentExploringGroup
-                                    key={idx}
-                                    parts={part.parts}
-                                    chatStatus={status}
-                                    isStreaming={isGroupStreaming}
-                                  />
-                                )
-                              }
-                              return renderPart(
-                                part,
-                                hasFinalText ? finalTextIndex + idx : idx,
-                                hasFinalText,
-                              )
-                            })
-                          })()}
-
-                          {/* Plan card at end of message - if ExitPlanMode tool has plan content */}
-                          {hasPlan && exitPlanPart && (
-                            <AgentExitPlanModeTool
-                              part={exitPlanPart}
-                              chatStatus={status}
-                            />
-                          )}
-
-                          {/* Planning indicator - like Canvas */}
-                          {shouldShowPlanning && (
-                            <AgentToolCall
-                              icon={AgentToolRegistry["tool-planning"].icon}
-                              title={AgentToolRegistry["tool-planning"].title(
-                                {},
-                              )}
-                              isPending={true}
-                              isError={false}
-                            />
-                          )}
-                        </div>
-
-                        {/* Copy, Play, and Usage buttons bar - shows on hover (always visible on mobile) */}
-                        {(hasTextContent || hasPlan) && (!isStreaming || !isLastMessage) && (
-                          <div className="flex justify-between items-center h-6 px-2 mt-1">
-                            <div className="flex items-center gap-0.5">
-                              <CopyButton
-                                onCopy={() => {
-                                  // If has plan, copy plan text; otherwise copy message content
-                                  if (hasPlan) {
-                                    navigator.clipboard.writeText(planText)
-                                  } else {
-                                    copyMessageContent(assistantMsg)
-                                  }
-                                }}
-                                isMobile={isMobile}
-                              />
-                              {/* Play button - plays plan if exists, otherwise final text or full message */}
-                              <PlayButton
-                                text={
-                                  hasPlan
-                                    ? planText
-                                    : hasFinalText
-                                      ? allParts[finalTextIndex]?.text || ""
-                                      : getMessageTextContent(assistantMsg)
-                                }
-                                isMobile={isMobile}
-                                playbackRate={ttsPlaybackRate}
-                                onPlaybackRateChange={handlePlaybackRateChange}
-                              />
-                            </div>
-                            {/* Token usage info - right side */}
-                            <AgentMessageUsage
-                              metadata={
-                                assistantMsg.metadata as AgentMessageMetadata
-                              }
-                              isStreaming={isStreaming}
-                              isMobile={isMobile}
-                            />
-                          </div>
-                        )}
-                      </motion.div>
-                    )
-                  })}
-
-                  {/* Planning indicator - shown when streaming starts but no assistant message yet */}
-                  {isStreaming &&
-                    isLastUserMessage &&
-                    group.assistantMsgs.length === 0 &&
-                        sandboxSetupStatus === "ready" && (
-                          <div className="mt-4">
-                            <AgentToolCall
-                              icon={AgentToolRegistry["tool-planning"].icon}
-                              title={AgentToolRegistry["tool-planning"].title({})}
-                              isPending={true}
-                              isError={false}
-                            />
-                          </div>
-                        )}
-                </MessageGroup>
-              )
-            })}
+            {/* ISOLATED: Messages rendered via Jotai atom subscription
+                Each component subscribes to specific atoms and only re-renders when those change */}
+            <IsolatedMessagesSection
+              subChatId={subChatId}
+              isMobile={isMobile}
+              sandboxSetupStatus={sandboxSetupStatus}
+              stickyTopClass={stickyTopClass}
+              sandboxSetupError={sandboxSetupError}
+              onRetrySetup={onRetrySetup}
+              UserBubbleComponent={AgentUserMessageBubble}
+              ToolCallComponent={AgentToolCall}
+              MessageGroupWrapper={MessageGroup}
+              toolRegistry={AgentToolRegistry}
+            />
           </div>
         </div>
       </div>
@@ -3084,24 +2221,13 @@ function ChatViewInner({
                 isCompacting={isCompacting}
                 changedFiles={changedFilesForSubChat}
                 worktreePath={projectPath}
-                onStop={async () => {
-                  // Mark as manually aborted to prevent completion sound
-                  agentChatStore.setManuallyAborted(subChatId, true)
-                  await stop()
-                  // Call DELETE endpoint to cancel server-side stream
-                  await fetch(
-                    `/api/agents/chat?id=${encodeURIComponent(subChatId)}`,
-                    {
-                      method: "DELETE",
-                      credentials: "include",
-                    },
-                  )
-                }}
+                onStop={handleStop}
               />
             </div>
           </div>
         )}
 
+<<<<<<< HEAD
       {/* Input */}
       <div
         className={cn(
@@ -3512,48 +2638,34 @@ function ChatViewInner({
           </div>
         </div>
 
-        {/* File mention dropdown */}
-        {/* Desktop: use projectPath for local file search */}
-        <AgentsFileMention
-          isOpen={
-            showMentionDropdown &&
-            (!!projectPath || !!repository || !!sandboxId)
-          }
-          onClose={() => {
-            setShowMentionDropdown(false)
-            // Reset subpage state when closing
-            setShowingFilesList(false)
-            setShowingSkillsList(false)
-            setShowingAgentsList(false)
-            setShowingToolsList(false)
-          }}
-          onSelect={handleMentionSelect}
-          searchText={mentionSearchText}
-          position={mentionPosition}
-          teamId={teamId}
-          repository={repository}
-          sandboxId={sandboxId}
-          projectPath={projectPath}
-          changedFiles={changedFilesForSubChat}
-          // Subpage navigation state
-          showingFilesList={showingFilesList}
-          showingSkillsList={showingSkillsList}
-          showingAgentsList={showingAgentsList}
-          showingToolsList={showingToolsList}
-        />
-
-        {/* Slash command dropdown */}
-        <AgentsSlashCommand
-          isOpen={showSlashDropdown}
-          onClose={handleCloseSlashTrigger}
-          onSelect={handleSlashSelect}
-          searchText={slashSearchText}
-          position={slashPosition}
-          teamId={teamId}
-          repository={repository}
-          isPlanMode={isPlanMode}
-        />
-      </div>
+      {/* Input - isolated component to prevent re-renders */}
+      <ChatInputArea
+        editorRef={editorRef}
+        fileInputRef={fileInputRef}
+        onSend={handleSend}
+        onStop={handleStop}
+        onApprovePlan={handleApprovePlan}
+        onCompact={handleCompact}
+        onCreateNewSubChat={onCreateNewSubChat}
+        isStreaming={isStreaming}
+        hasUnapprovedPlan={hasUnapprovedPlan}
+        isCompacting={isCompacting}
+        images={images}
+        files={files}
+        onAddAttachments={handleAddAttachments}
+        onRemoveImage={removeImage}
+        onRemoveFile={removeFile}
+        isUploading={isUploading}
+        messageTokenData={messageTokenData}
+        subChatId={subChatId}
+        parentChatId={parentChatId}
+        teamId={teamId}
+        repository={repository}
+        sandboxId={sandboxId}
+        projectPath={projectPath}
+        changedFiles={changedFilesForSubChat}
+        isMobile={isMobile}
+      />
     </>
   )
 }
@@ -4256,9 +3368,11 @@ export function ChatView({
         id: subChatId,
         messages,
         transport,
+        onError: () => {
+          // Error handling
+        },
         // Clear loading when streaming completes (works even if component unmounted)
         onFinish: () => {
-          console.log(`[SD] C:FINISH sub=${subChatId.slice(-8)}`)
           clearLoading(setLoadingSubChats, subChatId)
 
           // Check if this was a manual abort (ESC/Ctrl+C) - skip sound if so
@@ -4384,7 +3498,6 @@ export function ChatView({
         transport,
         // Clear loading when streaming completes
         onFinish: () => {
-          console.log(`[SD] C:FINISH sub=${newId.slice(-8)}`)
           clearLoading(setLoadingSubChats, newId)
 
           // Check if this was a manual abort (ESC/Ctrl+C) - skip sound if so
@@ -4925,8 +4038,6 @@ export function ChatView({
                         isDiffSidebarOpen={isDiffSidebarOpen}
                         diffStats={diffStats}
                       />
-                      {/* MCP Servers indicator */}
-                      <McpServersIndicator projectPath={originalProjectPath} />
                     </>
                   )}
                 </div>

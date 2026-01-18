@@ -10,6 +10,7 @@ import {
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { getToolStatus } from "./agent-tool-registry"
 import { AgentToolInterrupted } from "./agent-tool-interrupted"
+import { areToolPropsEqual } from "./agent-tool-utils"
 import { cn } from "../../../lib/utils"
 
 interface AgentBashToolProps {
@@ -200,4 +201,4 @@ export const AgentBashTool = memo(function AgentBashTool({
       </div>
     </div>
   )
-})
+}, areToolPropsEqual)

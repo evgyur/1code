@@ -253,6 +253,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // Use controller.error() instead of controller.close() so that
                 // the SDK Chat properly resets status from "streaming" to "ready"
                 // This allows user to retry sending messages after failed auth
+                console.log(`[SD] R:AUTH_ERR sub=${subId}`)
                 controller.error(new Error("Authentication required"))
                 return
               }

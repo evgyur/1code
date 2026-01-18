@@ -185,9 +185,28 @@ export function useNewChatDrafts(): NewChatDraft[] {
   const [drafts, setDrafts] = useState<NewChatDraft[]>(() => getNewChatDrafts())
 
   useEffect(() => {
-    const handleChange = () => {
+    const handleChange = (e?: Event) => {
+      // For storage events, only react to draft-related keys
+      // This prevents re-renders when other localStorage keys change (e.g., sub-chat active state)
+      if (e instanceof StorageEvent) {
+        if (!e.key?.startsWith("new-chat-draft-")) {
+          return
+        }
+      }
+
       const newDrafts = getNewChatDrafts()
-      setDrafts(newDrafts)
+      // Only update state if drafts actually changed (compare by content)
+      setDrafts((prev) => {
+        if (prev.length !== newDrafts.length) return newDrafts
+        const prevIds = prev.map((d) => d.id).sort().join(",")
+        const newIds = newDrafts.map((d) => d.id).sort().join(",")
+        if (prevIds !== newIds) return newDrafts
+        // Also compare text content
+        const prevTexts = prev.map((d) => `${d.id}:${d.text}`).sort().join("|")
+        const newTexts = newDrafts.map((d) => `${d.id}:${d.text}`).sort().join("|")
+        if (prevTexts !== newTexts) return newDrafts
+        return prev // No change, return previous reference
+      })
     }
 
     // Listen for custom event (same-tab changes)

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   platform: process.platform,
   arch: process.arch,
   getVersion: () => ipcRenderer.invoke("app:version"),
+  isPackaged: () => ipcRenderer.invoke("app:isPackaged"),
 
   // Auto-update methods
   checkForUpdates: () => ipcRenderer.invoke("update:check"),
@@ -167,6 +168,7 @@ export interface DesktopApi {
   platform: NodeJS.Platform
   arch: string
   getVersion: () => Promise<string>
+  isPackaged: () => Promise<boolean>
   // Auto-update
   checkForUpdates: () => Promise<UpdateInfo | null>
   downloadUpdate: () => Promise<boolean>

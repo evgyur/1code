@@ -3,6 +3,7 @@
 import { memo, useState, useMemo } from "react"
 import { ChevronRight } from "lucide-react"
 import { ExternalLinkIcon } from "../../../components/ui/icons"
+import { areToolPropsEqual } from "./agent-tool-utils"
 import { cn } from "../../../lib/utils"
 
 interface SearchResult {
@@ -121,4 +122,5 @@ export const AgentWebSearchCollapsible = memo(
       </div>
     )
   },
+  areToolPropsEqual,
 )

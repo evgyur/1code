@@ -5,6 +5,7 @@ import { ChevronRight } from "lucide-react"
 import { cn } from "../../../lib/utils"
 import { ChatMarkdownRenderer } from "../../../components/chat-markdown-renderer"
 import { AgentToolInterrupted } from "./agent-tool-interrupted"
+import { areToolPropsEqual } from "./agent-tool-utils"
 
 interface ThinkingToolPart {
   type: string
@@ -129,4 +130,4 @@ export const AgentThinkingTool = memo(function AgentThinkingTool({
       )}
     </div>
   )
-})
+}, areToolPropsEqual)

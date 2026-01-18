@@ -1,11 +1,12 @@
 import { cn } from "../lib/utils"
-import { memo, useMemo, useState, useCallback, useEffect } from "react"
+import { memo, useMemo, useState, useCallback, useEffect, useRef } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
 import { Copy, Check } from "lucide-react"
 import { useCodeTheme } from "../lib/hooks/use-code-theme"
 import { highlightCode } from "../lib/themes/shiki-theme-loader"
+import { marked } from "marked"
 
 // Removed react-syntax-highlighter themes - now using Shiki with VS Code themes
 
@@ -165,6 +166,8 @@ interface ChatMarkdownRendererProps {
   className?: string
   /** Whether to enable syntax highlighting (default: true) */
   syntaxHighlight?: boolean
+  /** Whether content is being streamed - enables throttling for better FPS */
+  isStreaming?: boolean
 }
 
 // Size-based styles inspired by Notion's spacing
@@ -275,9 +278,45 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
   size = "md",
   className,
   syntaxHighlight = true,
+  isStreaming = false,
 }: ChatMarkdownRendererProps) {
   const codeTheme = useCodeTheme()
   const styles = sizeStyles[size]
+
+  // Throttle content updates during streaming for better FPS
+  // Only update rendered content every 150ms during streaming
+  const [throttledContent, setThrottledContent] = useState(content)
+  const lastUpdateRef = useRef<number>(0)
+
+  useEffect(() => {
+    if (!isStreaming) {
+      // Not streaming - update immediately
+      setThrottledContent(content)
+      return
+    }
+
+    const now = Date.now()
+    const timeSinceLastUpdate = now - lastUpdateRef.current
+
+    // Throttle to ~7 updates per second (150ms intervals) during streaming
+    if (timeSinceLastUpdate >= 150) {
+      lastUpdateRef.current = now
+      setThrottledContent(content)
+    } else {
+      // Schedule update for remaining time
+      const timer = setTimeout(() => {
+        lastUpdateRef.current = Date.now()
+        setThrottledContent(content)
+      }, 150 - timeSinceLastUpdate)
+      return () => clearTimeout(timer)
+    }
+  }, [content, isStreaming])
+
+  // Memoize processed content to avoid re-processing on every render
+  const processedContent = useMemo(
+    () => fixMalformedEmphasis(fixNumberedListBreaks(stripEmojis(throttledContent))),
+    [throttledContent]
+  )
 
   const components = useMemo(
     () => ({
@@ -425,8 +464,6 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
     [styles, codeTheme, syntaxHighlight, size],
   )
 
-  const processedContent = fixMalformedEmphasis(fixNumberedListBreaks(stripEmojis(content)))
-
   return (
     <div
       className={cn(
@@ -498,3 +535,128 @@ export const FullscreenMarkdownRenderer = memo(
     )
   },
 )
+
+// ============================================================================
+// MEMOIZED MARKDOWN - Block-level memoization for streaming performance
+// ============================================================================
+// This is the KEY optimization for streaming performance!
+// Instead of re-rendering the entire markdown on each chunk, we:
+// 1. Parse markdown into discrete blocks (paragraphs, headers, code blocks, etc.)
+// 2. Memoize each block individually
+// 3. Only the last (incomplete) block re-renders during streaming
+
+// Simple hash function for content-based keys
+// Using djb2 algorithm - fast and good distribution
+function hashString(str: string): string {
+  let hash = 5381
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i)
+  }
+  // Convert to unsigned 32-bit and then to base36 for shorter keys
+  return (hash >>> 0).toString(36)
+}
+
+interface ParsedBlock {
+  content: string
+  // Stable key based on: block type + position hint + content hash
+  // This ensures blocks maintain identity even when new blocks are inserted
+  key: string
+}
+
+function parseMarkdownIntoBlocks(markdown: string): ParsedBlock[] {
+  try {
+    const tokens = marked.lexer(markdown)
+    // Track occurrences of each type+hash combo to handle duplicates
+    const seen = new Map<string, number>()
+    return tokens.map((token) => {
+      const content = token.raw
+      // Base key = type + content hash
+      const baseKey = `${token.type}-${hashString(content)}`
+      // Add occurrence counter for duplicate content (e.g., multiple empty lines)
+      const occurrence = seen.get(baseKey) ?? 0
+      seen.set(baseKey, occurrence + 1)
+      const key = occurrence > 0 ? `${baseKey}-${occurrence}` : baseKey
+      return { content, key }
+    })
+  } catch {
+    // Fallback: return entire content as single block
+    return [{ content: markdown, key: `fallback-${hashString(markdown)}` }]
+  }
+}
+
+// Individual block - only re-renders when its content changes
+const MemoizedMarkdownBlock = memo(
+  function MemoizedMarkdownBlock({
+    content,
+    size,
+    className,
+    blockIndex,
+  }: {
+    content: string
+    size: MarkdownSize
+    className?: string
+    blockIndex: number
+  }) {
+    // Don't render empty blocks
+    if (!content.trim()) return null
+
+    return (
+      <ChatMarkdownRenderer
+        content={content}
+        size={size}
+        className={className}
+        isStreaming={false}  // Individual blocks are never "streaming"
+      />
+    )
+  },
+  (prevProps, nextProps) => {
+    // Only re-render if content actually changed
+    const same = prevProps.content === nextProps.content &&
+           prevProps.size === nextProps.size &&
+           prevProps.className === nextProps.className
+    return same
+  },
+)
+
+MemoizedMarkdownBlock.displayName = "MemoizedMarkdownBlock"
+
+// Main memoized markdown component - splits into blocks and memoizes each
+export const MemoizedMarkdown = memo(
+  function MemoizedMarkdown({
+    content,
+    id,
+    size = "sm",
+    className,
+  }: {
+    content: string
+    id: string  // Unique ID for stable keys
+    size?: MarkdownSize
+    className?: string
+  }) {
+    // Pre-process content before splitting into blocks
+    const processedContent = useMemo(
+      () => fixMalformedEmphasis(fixNumberedListBreaks(stripEmojis(content))),
+      [content]
+    )
+
+    // Split into blocks - this recalculates when content changes,
+    // but each block is individually memoized with content-based keys
+    const blocks = useMemo(() => parseMarkdownIntoBlocks(processedContent), [processedContent])
+
+    return (
+      <>
+        {blocks.map((block, index) => (
+          <MemoizedMarkdownBlock
+            key={`${id}-${block.key}`}
+            content={block.content}
+            size={size}
+            className={className}
+            blockIndex={index}
+          />
+        ))}
+      </>
+    )
+  },
+)
+
+MemoizedMarkdown.displayName = "MemoizedMarkdown"

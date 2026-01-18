@@ -23,6 +23,7 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
 
   // App info
   ipcMain.handle("app:version", () => app.getVersion())
+  ipcMain.handle("app:isPackaged", () => app.isPackaged)
   
   // Window frame preference
   ipcMain.handle("window:set-frame-preference", (_event, useNativeFrame: boolean) => {

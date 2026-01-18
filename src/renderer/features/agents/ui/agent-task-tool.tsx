@@ -5,6 +5,7 @@ import { ChevronRight } from "lucide-react"
 import { AgentToolRegistry, getToolStatus } from "./agent-tool-registry"
 import { AgentToolCall } from "./agent-tool-call"
 import { AgentToolInterrupted } from "./agent-tool-interrupted"
+import { areTaskToolPropsEqual } from "./agent-tool-utils"
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
 
@@ -212,4 +213,4 @@ export const AgentTaskTool = memo(function AgentTaskTool({
       )}
     </div>
   )
-})
+}, areTaskToolPropsEqual)

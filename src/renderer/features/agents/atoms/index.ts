@@ -111,6 +111,9 @@ export const setLoading = (
   parentChatId: string,
 ) => {
   setter((prev) => {
+    // Only create new Map if value actually changed
+    // This prevents unnecessary re-renders
+    if (prev.get(subChatId) === parentChatId) return prev
     const next = new Map(prev)
     next.set(subChatId, parentChatId)
     return next
@@ -123,6 +126,9 @@ export const clearLoading = (
   subChatId: string,
 ) => {
   setter((prev) => {
+    // Only create new Map if subChatId was actually in loading state
+    // This prevents unnecessary re-renders when switching between non-loading sub-chats
+    if (!prev.has(subChatId)) return prev
     const next = new Map(prev)
     next.delete(subChatId)
     return next

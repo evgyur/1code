@@ -73,7 +73,8 @@ export function createTransformer() {
   }
 
   return function* transform(msg: any): Generator<UIMessageChunk> {
-    // Debug: log all message types to understand what SDK sends
+    // Debug: log ALL message types to understand what SDK sends
+    console.log("[transform] MSG:", msg.type, msg.subtype || "", msg.event?.type || "")
     if (msg.type === "system") {
       console.log("[transform] SYSTEM message:", msg.subtype, msg)
     }
@@ -102,7 +103,11 @@ export function createTransformer() {
     // ===== STREAMING EVENTS (token-by-token) =====
     if (msg.type === "stream_event") {
       const event = msg.event
-      console.log("[transform] stream_event:", event?.type, "delta:", event?.delta?.type)
+      console.log("[transform] stream_event:", event?.type, "delta:", event?.delta?.type, "content_block_type:", event?.content_block?.type)
+      // Debug: log full event when content_block_start but no type
+      if (event?.type === "content_block_start" && !event?.content_block?.type) {
+        console.log("[transform] WARNING: content_block_start with no type, full event:", JSON.stringify(event))
+      }
       if (!event) return
 
       // Text block start
@@ -443,6 +448,7 @@ export function createTransformer() {
       }
       yield { type: "message-metadata", messageMetadata: metadata }
       yield { type: "finish-step" }
+      console.log("[transform] YIELDING FINISH from result message")
       yield { type: "finish", messageMetadata: metadata }
     }
   }
