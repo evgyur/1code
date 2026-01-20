@@ -108,7 +108,9 @@ export function areToolPropsEqual(
   nextProps: { part: any; chatStatus?: string },
 ): boolean {
   // First check if the tool data itself changed
-  if (!arePartsEqual(prevProps.part, nextProps.part)) return false
+  const partsEqual = arePartsEqual(prevProps.part, nextProps.part)
+
+  if (!partsEqual) return false
 
   // If tool is completed, it doesn't care about chatStatus changes
   if (isToolCompleted(nextProps.part)) {

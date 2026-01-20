@@ -105,9 +105,13 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing task"
       return isPending ? "Running Task" : "Task completed"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const description = part.input?.description || ""
       return description.length > 50
         ? description.slice(0, 47) + "..."
@@ -121,20 +125,34 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing search"
       if (isPending) return "Grepping"
+
+      // DEBUG: Log the part.output to understand its structure
+      console.log("[Grep DEBUG] part.output:", {
+        state: part.state,
+        output: part.output,
+        outputType: typeof part.output,
+        outputKeys: part.output && typeof part.output === 'object' ? Object.keys(part.output) : null,
+        numFiles: part.output?.numFiles,
+      })
+
       const numFiles = part.output?.numFiles || 0
       return numFiles > 0 ? `Grepped ${numFiles} files` : "No matches"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const pattern = part.input?.pattern || ""
       const path = part.input?.path || ""
-      
+
       if (path) {
         // Show "pattern in path"
         const combined = `${pattern} in ${path}`
         return combined.length > 40 ? combined.slice(0, 37) + "..." : combined
       }
-      
+
       return pattern.length > 40 ? pattern.slice(0, 37) + "..." : pattern
     },
     variant: "simple",
@@ -145,20 +163,34 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing search"
       if (isPending) return "Exploring files"
+
+      // DEBUG: Log the part.output to understand its structure
+      console.log("[Glob DEBUG] part.output:", {
+        state: part.state,
+        output: part.output,
+        outputType: typeof part.output,
+        outputKeys: part.output && typeof part.output === 'object' ? Object.keys(part.output) : null,
+        numFiles: part.output?.numFiles,
+      })
+
       const numFiles = part.output?.numFiles || 0
       return numFiles > 0 ? `Found ${numFiles} files` : "No files found"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const pattern = part.input?.pattern || ""
       const targetDir = part.input?.target_directory || ""
-      
+
       if (targetDir) {
         // Show "pattern in targetDir"
         const combined = `${pattern} in ${targetDir}`
         return combined.length > 40 ? combined.slice(0, 37) + "..." : combined
       }
-      
+
       return pattern.length > 40 ? pattern.slice(0, 37) + "..." : pattern
     },
     variant: "simple",
@@ -169,14 +201,19 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing to read"
       return isPending ? "Reading" : "Read"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const filePath = part.input?.file_path || ""
       if (!filePath) return "" // Don't show "file" placeholder during streaming
       return filePath.split("/").pop() || ""
     },
     tooltipContent: (part) => {
+      if (part.state === "input-streaming") return ""
       const filePath = part.input?.file_path || ""
       return getDisplayPath(filePath)
     },
@@ -186,11 +223,15 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
   "tool-Edit": {
     icon: IconEditFile,
     title: (part) => {
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing edit"
       const filePath = part.input?.file_path || ""
       if (!filePath) return "Edit" // Show "Edit" if no file path yet during streaming
       return filePath.split("/").pop() || "Edit"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
       if (isPending) return ""
@@ -247,8 +288,14 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
 
   "tool-Write": {
     icon: WriteFileIcon,
-    title: () => "Create",
+    title: (part) => {
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing to create"
+      return "Create"
+    },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const filePath = part.input?.file_path || ""
       if (!filePath) return "" // Don't show "file" placeholder during streaming
       return filePath.split("/").pop() || ""
@@ -261,13 +308,18 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Generating command"
       return isPending ? "Running command" : "Ran command"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const command = part.input?.command || ""
-      // Extract first command word
-      const firstWord = command.split(/\s+/)[0] || ""
-      return firstWord.length > 30 ? firstWord.slice(0, 27) + "..." : firstWord
+      if (!command) return ""
+      // Normalize line continuations and show truncated command
+      const normalized = command.replace(/\\\s*\n\s*/g, " ").trim()
+      return normalized.length > 50 ? normalized.slice(0, 47) + "..." : normalized
     },
     variant: "simple",
   },
@@ -277,9 +329,13 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing fetch"
       return isPending ? "Fetching" : "Fetched"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const url = part.input?.url || ""
       try {
         return new URL(url).hostname.replace("www.", "")
@@ -295,9 +351,13 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     title: (part) => {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
+      const isInputStreaming = part.state === "input-streaming"
+      if (isInputStreaming) return "Preparing search"
       return isPending ? "Searching web" : "Searched web"
     },
     subtitle: (part) => {
+      // Don't show subtitle while input is still streaming
+      if (part.state === "input-streaming") return ""
       const query = part.input?.query || ""
       return query.length > 40 ? query.slice(0, 37) + "..." : query
     },

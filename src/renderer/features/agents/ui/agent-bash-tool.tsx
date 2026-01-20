@@ -15,6 +15,8 @@ import { cn } from "../../../lib/utils"
 
 interface AgentBashToolProps {
   part: any
+  messageId?: string
+  partIndex?: number
   chatStatus?: string
 }
 
@@ -44,6 +46,8 @@ function limitLines(text: string, maxLines: number): { text: string; truncated: 
 
 export const AgentBashTool = memo(function AgentBashTool({
   part,
+  messageId,
+  partIndex,
   chatStatus,
 }: AgentBashToolProps) {
   const [isOutputExpanded, setIsOutputExpanded] = useState(false)
@@ -105,7 +109,12 @@ export const AgentBashTool = memo(function AgentBashTool({
   }
 
   return (
-    <div className="rounded-lg border border-border bg-muted/30 overflow-hidden mx-2">
+    <div
+      data-message-id={messageId}
+      data-part-index={partIndex}
+      data-part-type="tool-Bash"
+      className="rounded-lg border border-border bg-muted/30 overflow-hidden mx-2"
+    >
       {/* Header - clickable to expand, fixed height to prevent layout shift */}
       <div
         onClick={() => hasMoreOutput && !isPending && setIsOutputExpanded(!isOutputExpanded)}

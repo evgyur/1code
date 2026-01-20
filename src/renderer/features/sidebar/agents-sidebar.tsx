@@ -33,6 +33,7 @@ const AuthDialog = () => null
 // import { DiscordIcon } from "@/components/icons"
 import { DiscordIcon } from "../../icons"
 import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-subchat-dialog"
+import { ConfirmArchiveDialog } from "../../components/confirm-archive-dialog"
 import { trpc } from "../../lib/trpc"
 import { toast } from "sonner"
 import {
@@ -48,7 +49,6 @@ import {
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "../../components/ui/tooltip"
 import { Kbd } from "../../components/ui/kbd"
@@ -324,7 +324,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   gitOwner,
   gitProvider,
   stats,
-  selectedChatIds,
+  selectedChatIdsSize,
   canShowPinOption,
   areAllSelectedPinned,
   filteredChatsLength,
@@ -346,7 +346,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   archiveBatchPending,
   nameRefCallback,
   formatTime,
-  justCreatedIds,
+  isJustCreated,
 }: {
   chatId: string
   chatName: string | null
@@ -368,7 +368,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   gitOwner: string | null | undefined
   gitProvider: string | null | undefined
   stats: { fileCount: number; additions: number; deletions: number } | undefined
-  selectedChatIds: Set<string>
+  selectedChatIdsSize: number
   canShowPinOption: boolean
   areAllSelectedPinned: boolean
   filteredChatsLength: number
@@ -390,7 +390,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   archiveBatchPending: boolean
   nameRefCallback: (chatId: string, el: HTMLSpanElement | null) => void
   formatTime: (dateStr: string) => string
-  justCreatedIds: Set<string>
+  isJustCreated: boolean
 }) {
   return (
     <ContextMenu>
@@ -468,7 +468,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
                     text={chatName || ""}
                     placeholder="New workspace"
                     id={chatId}
-                    isJustCreated={justCreatedIds.has(chatId)}
+                    isJustCreated={isJustCreated}
                     showPlaceholder={true}
                   />
                 </span>
@@ -513,14 +513,14 @@ const AgentChatItem = React.memo(function AgentChatItem({
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
         {/* Multi-select context menu */}
-        {isMultiSelectMode && selectedChatIds.has(chatId) ? (
+        {isMultiSelectMode && isChecked ? (
           <>
             {canShowPinOption && (
               <>
                 <ContextMenuItem onClick={areAllSelectedPinned ? onBulkUnpin : onBulkPin}>
                   {areAllSelectedPinned
-                    ? `Unpin ${selectedChatIds.size} ${pluralize(selectedChatIds.size, "workspace")}`
-                    : `Pin ${selectedChatIds.size} ${pluralize(selectedChatIds.size, "workspace")}`}
+                    ? `Unpin ${selectedChatIdsSize} ${pluralize(selectedChatIdsSize, "workspace")}`
+                    : `Pin ${selectedChatIdsSize} ${pluralize(selectedChatIdsSize, "workspace")}`}
                 </ContextMenuItem>
                 <ContextMenuSeparator />
               </>
@@ -528,7 +528,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
             <ContextMenuItem onClick={onBulkArchive} disabled={archiveBatchPending}>
               {archiveBatchPending
                 ? "Archiving..."
-                : `Archive ${selectedChatIds.size} ${pluralize(selectedChatIds.size, "workspace")}`}
+                : `Archive ${selectedChatIdsSize} ${pluralize(selectedChatIdsSize, "workspace")}`}
             </ContextMenuItem>
           </>
         ) : (
@@ -568,44 +568,48 @@ const AgentChatItem = React.memo(function AgentChatItem({
   )
 })
 
-// Memoized Chat List Section component
-const ChatListSection = React.memo(function ChatListSection({
-  title,
-  chats,
-  selectedChatId,
-  focusedChatIndex,
-  loadingChatIds,
-  unseenChanges,
-  workspacePendingPlans,
-  isMultiSelectMode,
-  selectedChatIds,
-  isMobileFullscreen,
-  isDesktop,
-  pinnedChatIds,
-  projectsMap,
-  workspaceFileStats,
-  filteredChats,
-  canShowPinOption,
-  areAllSelectedPinned,
-  onChatClick,
-  onCheckboxClick,
-  onMouseEnter,
-  onMouseLeave,
-  onArchive,
-  onTogglePin,
-  onRenameClick,
-  onCopyBranch,
-  onArchiveAllBelow,
-  onArchiveOthers,
-  onBulkPin,
-  onBulkUnpin,
-  onBulkArchive,
-  archivePending,
-  archiveBatchPending,
-  nameRefCallback,
-  formatTime,
-  justCreatedIds,
-}: {
+// Custom comparator for ChatListSection to handle Set/Map props correctly
+// Sets and Maps from Jotai atoms are stable by reference when unchanged,
+// but we add explicit size checks for extra safety
+function chatListSectionPropsAreEqual(
+  prevProps: ChatListSectionProps,
+  nextProps: ChatListSectionProps
+): boolean {
+  // Quick checks for primitive props that change often
+  if (prevProps.selectedChatId !== nextProps.selectedChatId) return false
+  if (prevProps.focusedChatIndex !== nextProps.focusedChatIndex) return false
+  if (prevProps.isMultiSelectMode !== nextProps.isMultiSelectMode) return false
+  if (prevProps.canShowPinOption !== nextProps.canShowPinOption) return false
+  if (prevProps.areAllSelectedPinned !== nextProps.areAllSelectedPinned) return false
+  if (prevProps.archivePending !== nextProps.archivePending) return false
+  if (prevProps.archiveBatchPending !== nextProps.archiveBatchPending) return false
+  if (prevProps.title !== nextProps.title) return false
+  if (prevProps.isMobileFullscreen !== nextProps.isMobileFullscreen) return false
+  if (prevProps.isDesktop !== nextProps.isDesktop) return false
+
+  // Check arrays by reference (they're stable from useMemo in parent)
+  if (prevProps.chats !== nextProps.chats) return false
+  if (prevProps.filteredChats !== nextProps.filteredChats) return false
+
+  // Check Sets by reference - Jotai atoms return same reference if unchanged
+  if (prevProps.loadingChatIds !== nextProps.loadingChatIds) return false
+  if (prevProps.unseenChanges !== nextProps.unseenChanges) return false
+  if (prevProps.workspacePendingPlans !== nextProps.workspacePendingPlans) return false
+  if (prevProps.selectedChatIds !== nextProps.selectedChatIds) return false
+  if (prevProps.pinnedChatIds !== nextProps.pinnedChatIds) return false
+  if (prevProps.justCreatedIds !== nextProps.justCreatedIds) return false
+
+  // Check Maps by reference
+  if (prevProps.projectsMap !== nextProps.projectsMap) return false
+  if (prevProps.workspaceFileStats !== nextProps.workspaceFileStats) return false
+
+  // Callback functions are stable from useCallback in parent
+  // No need to compare them - they only change when their deps change
+
+  return true
+}
+
+interface ChatListSectionProps {
   title: string
   chats: Array<{
     id: string
@@ -647,8 +651,54 @@ const ChatListSection = React.memo(function ChatListSection({
   nameRefCallback: (chatId: string, el: HTMLSpanElement | null) => void
   formatTime: (dateStr: string) => string
   justCreatedIds: Set<string>
-}) {
+}
+
+// Memoized Chat List Section component
+const ChatListSection = React.memo(function ChatListSection({
+  title,
+  chats,
+  selectedChatId,
+  focusedChatIndex,
+  loadingChatIds,
+  unseenChanges,
+  workspacePendingPlans,
+  isMultiSelectMode,
+  selectedChatIds,
+  isMobileFullscreen,
+  isDesktop,
+  pinnedChatIds,
+  projectsMap,
+  workspaceFileStats,
+  filteredChats,
+  canShowPinOption,
+  areAllSelectedPinned,
+  onChatClick,
+  onCheckboxClick,
+  onMouseEnter,
+  onMouseLeave,
+  onArchive,
+  onTogglePin,
+  onRenameClick,
+  onCopyBranch,
+  onArchiveAllBelow,
+  onArchiveOthers,
+  onBulkPin,
+  onBulkUnpin,
+  onBulkArchive,
+  archivePending,
+  archiveBatchPending,
+  nameRefCallback,
+  formatTime,
+  justCreatedIds,
+}: ChatListSectionProps) {
   if (chats.length === 0) return null
+
+  // Pre-compute global indices map to avoid O(n²) findIndex in map()
+  const globalIndexMap = useMemo(() => {
+    const map = new Map<string, number>()
+    filteredChats.forEach((c, i) => map.set(c.id, i))
+    return map
+  }, [filteredChats])
 
   return (
     <>
@@ -667,7 +717,7 @@ const ChatListSection = React.memo(function ChatListSection({
           const isLoading = loadingChatIds.has(chat.id)
           const isSelected = selectedChatId === chat.id
           const isPinned = pinnedChatIds.has(chat.id)
-          const globalIndex = filteredChats.findIndex((c) => c.id === chat.id)
+          const globalIndex = globalIndexMap.get(chat.id) ?? -1
           const isFocused = focusedChatIndex === globalIndex && focusedChatIndex >= 0
           const project = projectsMap.get(chat.projectId)
           const repoName = project?.gitRepo || project?.name
@@ -680,6 +730,7 @@ const ChatListSection = React.memo(function ChatListSection({
           const stats = workspaceFileStats.get(chat.id)
           const hasPendingPlan = workspacePendingPlans.has(chat.id)
           const isLastInFilteredChats = globalIndex === filteredChats.length - 1
+          const isJustCreated = justCreatedIds.has(chat.id)
 
           return (
             <AgentChatItem
@@ -704,7 +755,7 @@ const ChatListSection = React.memo(function ChatListSection({
               gitOwner={project?.gitOwner}
               gitProvider={project?.gitProvider}
               stats={stats}
-              selectedChatIds={selectedChatIds}
+              selectedChatIdsSize={selectedChatIds.size}
               canShowPinOption={canShowPinOption}
               areAllSelectedPinned={areAllSelectedPinned}
               filteredChatsLength={filteredChats.length}
@@ -726,14 +777,14 @@ const ChatListSection = React.memo(function ChatListSection({
               archiveBatchPending={archiveBatchPending}
               nameRefCallback={nameRefCallback}
               formatTime={formatTime}
-              justCreatedIds={justCreatedIds}
+              isJustCreated={isJustCreated}
             />
           )
         })}
       </div>
     </>
   )
-})
+}, chatListSectionPropsAreEqual)
 
 interface AgentsSidebarProps {
   userId?: string | null | undefined
@@ -881,26 +932,24 @@ const SidebarHeader = memo(function SidebarHeader({
             WebkitAppRegion: "no-drag",
           }}
         >
-          <TooltipProvider>
-            <Tooltip delayDuration={500}>
-              <TooltipTrigger asChild>
-                <ButtonCustom
-                  variant="ghost"
-                  size="icon"
-                  onClick={onToggleSidebar}
-                  tabIndex={-1}
-                  className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
-                  aria-label="Close sidebar"
-                >
-                  <IconDoubleChevronLeft className="h-4 w-4" />
-                </ButtonCustom>
-              </TooltipTrigger>
-              <TooltipContent>
-                Close sidebar
-                <Kbd>⌘\</Kbd>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip delayDuration={500}>
+            <TooltipTrigger asChild>
+              <ButtonCustom
+                variant="ghost"
+                size="icon"
+                onClick={onToggleSidebar}
+                tabIndex={-1}
+                className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
+                aria-label="Close sidebar"
+              >
+                <IconDoubleChevronLeft className="h-4 w-4" />
+              </ButtonCustom>
+            </TooltipTrigger>
+            <TooltipContent>
+              Close sidebar
+              <Kbd>⌘\</Kbd>
+            </TooltipContent>
+          </Tooltip>
         </div>
       )}
 
@@ -1220,9 +1269,9 @@ export function AgentsSidebar({
   const selectAllChats = useSetAtom(selectAllAgentChatsAtom)
   const clearChatSelection = useSetAtom(clearAgentChatSelectionAtom)
 
-  // Scroll gradient state for agents list
-  const [showBottomGradient, setShowBottomGradient] = useState(false)
-  const [showTopGradient, setShowTopGradient] = useState(false)
+  // Scroll gradient refs - use DOM manipulation to avoid re-renders
+  const topGradientRef = useRef<HTMLDivElement>(null)
+  const bottomGradientRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   // Multiple drafts state - uses event-based sync instead of polling
@@ -1244,6 +1293,13 @@ export function AgentsSidebar({
     name: string
   } | null>(null)
   const [renameLoading, setRenameLoading] = useState(false)
+
+  // Confirm archive dialog state
+  const [confirmArchiveDialogOpen, setConfirmArchiveDialogOpen] = useState(false)
+  const [archivingChatId, setArchivingChatId] = useState<string | null>(null)
+  const [activeProcessCount, setActiveProcessCount] = useState(0)
+  const [hasWorktree, setHasWorktree] = useState(false)
+  const [uncommittedCount, setUncommittedCount] = useState(0)
 
   // Track initial mount to skip footer animation on load
   const hasFooterAnimated = useRef(false)
@@ -1873,9 +1929,42 @@ export function AgentsSidebar({
   }, [])
 
   // Archive single chat - wrapped for memoized component
-  const handleArchiveSingle = useCallback((chatId: string) => {
-    archiveChatMutation.mutate({ id: chatId })
-  }, [archiveChatMutation])
+  // Checks for active terminal processes and worktree, shows confirmation dialog if needed
+  const handleArchiveSingle = useCallback(async (chatId: string) => {
+    // Fetch both session count and worktree status in parallel
+    const [sessionCount, worktreeStatus] = await Promise.all([
+      utils.terminal.getActiveSessionCount.fetch({ workspaceId: chatId }),
+      utils.chats.getWorktreeStatus.fetch({ chatId }),
+    ])
+
+    const needsConfirmation = sessionCount > 0 || worktreeStatus.hasWorktree
+
+    if (needsConfirmation) {
+      // Show confirmation dialog
+      setArchivingChatId(chatId)
+      setActiveProcessCount(sessionCount)
+      setHasWorktree(worktreeStatus.hasWorktree)
+      setUncommittedCount(worktreeStatus.uncommittedCount)
+      setConfirmArchiveDialogOpen(true)
+    } else {
+      // No active processes and no worktree, archive directly
+      archiveChatMutation.mutate({ id: chatId })
+    }
+  }, [archiveChatMutation, utils.terminal.getActiveSessionCount, utils.chats.getWorktreeStatus])
+
+  // Confirm archive after user accepts dialog (optimistic - closes immediately)
+  const handleConfirmArchive = useCallback((deleteWorktree: boolean) => {
+    if (archivingChatId) {
+      archiveChatMutation.mutate({ id: archivingChatId, deleteWorktree })
+      setArchivingChatId(null)
+    }
+  }, [archiveChatMutation, archivingChatId])
+
+  // Close archive confirmation dialog
+  const handleCloseArchiveDialog = useCallback(() => {
+    setConfirmArchiveDialogOpen(false)
+    setArchivingChatId(null)
+  }, [])
 
   // Copy branch name to clipboard
   const handleCopyBranch = useCallback((branch: string) => {
@@ -1967,7 +2056,7 @@ export function AgentsSidebar({
     }
   }, [updateSidebarHoverUI])
 
-  // Check if scroll is needed and show/hide gradients
+  // Check if scroll is needed and show/hide gradients via DOM manipulation
   React.useEffect(() => {
     const container = scrollContainerRef.current
     if (!container) return
@@ -1975,11 +2064,11 @@ export function AgentsSidebar({
     const checkScroll = () => {
       const needsScroll = container.scrollHeight > container.clientHeight
       if (needsScroll) {
-        setShowBottomGradient(true)
-        setShowTopGradient(false)
+        if (bottomGradientRef.current) bottomGradientRef.current.style.opacity = "1"
+        if (topGradientRef.current) topGradientRef.current.style.opacity = "0"
       } else {
-        setShowBottomGradient(false)
-        setShowTopGradient(false)
+        if (bottomGradientRef.current) bottomGradientRef.current.style.opacity = "0"
+        if (topGradientRef.current) topGradientRef.current.style.opacity = "0"
       }
     }
 
@@ -1991,13 +2080,13 @@ export function AgentsSidebar({
     return () => resizeObserver.disconnect()
   }, [filteredChats])
 
-  // Direct listener for Cmd+F to focus search input
+  // Direct listener for Cmd+K to focus search input
   useEffect(() => {
     const handleSearchHotkey = (e: KeyboardEvent) => {
-      // Check for Cmd+F or Ctrl+F (only for search functionality)
+      // Check for Cmd+K or Ctrl+K (only for search functionality)
       if (
         (e.metaKey || e.ctrlKey) &&
-        e.code === "KeyF" &&
+        e.code === "KeyK" &&
         !e.shiftKey &&
         !e.altKey
       ) {
@@ -2092,9 +2181,9 @@ export function AgentsSidebar({
           return
         }
 
-        // Otherwise archive current chat
+        // Otherwise archive current chat (with confirmation if has active processes)
         if (selectedChatId && !archiveChatMutation.isPending) {
-          archiveChatMutation.mutate({ id: selectedChatId })
+          handleArchiveSingle(selectedChatId)
         }
       }
     }
@@ -2108,6 +2197,7 @@ export function AgentsSidebar({
     selectedChatIds,
     archiveChatsBatchMutation,
     handleBulkArchive,
+    handleArchiveSingle,
   ])
 
   // Clear selection when project changes
@@ -2115,23 +2205,28 @@ export function AgentsSidebar({
     clearChatSelection()
   }, [selectedProject?.id, clearChatSelection])
 
-  // Handle scroll for gradients
+  // Handle scroll for gradients - use DOM manipulation to avoid re-renders
   const handleAgentsScroll = React.useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
       const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
       const needsScroll = scrollHeight > clientHeight
 
       if (!needsScroll) {
-        setShowBottomGradient(false)
-        setShowTopGradient(false)
+        if (topGradientRef.current) topGradientRef.current.style.opacity = "0"
+        if (bottomGradientRef.current) bottomGradientRef.current.style.opacity = "0"
         return
       }
 
       const isAtBottom = scrollTop + clientHeight >= scrollHeight - 5
       const isAtTop = scrollTop <= 5
 
-      setShowBottomGradient(!isAtBottom)
-      setShowTopGradient(!isAtTop)
+      // Update gradient visibility via DOM (no setState = no re-render)
+      if (topGradientRef.current) {
+        topGradientRef.current.style.opacity = isAtTop ? "0" : "1"
+      }
+      if (bottomGradientRef.current) {
+        bottomGradientRef.current.style.opacity = isAtBottom ? "0" : "1"
+      }
     },
     [],
   )
@@ -2229,27 +2324,25 @@ export function AgentsSidebar({
             />
           </div>
           {/* New Workspace Button */}
-          <TooltipProvider>
-            <Tooltip delayDuration={500}>
-              <TooltipTrigger asChild>
-                <ButtonCustom
-                  onClick={handleNewAgent}
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    "px-2 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5",
-                    isMobileFullscreen ? "h-10" : "h-7",
-                  )}
-                >
-                  <span className="text-sm font-medium">New Workspace</span>
-                </ButtonCustom>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                Start a new workspace
-                <Kbd>{getShortcutKey("newAgent")}</Kbd>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip delayDuration={500}>
+            <TooltipTrigger asChild>
+              <ButtonCustom
+                onClick={handleNewAgent}
+                variant="outline"
+                size="sm"
+                className={cn(
+                  "px-2 w-full hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground rounded-lg gap-1.5",
+                  isMobileFullscreen ? "h-10" : "h-7",
+                )}
+              >
+                <span className="text-sm font-medium">New Workspace</span>
+              </ButtonCustom>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              Start a new workspace
+              <Kbd>{getShortcutKey("newAgent")}</Kbd>
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -2384,19 +2477,16 @@ export function AgentsSidebar({
         </div>
 
         {/* Top gradient fade (appears when scrolled down) */}
+        {/* Top gradient fade (appears when scrolled down) */}
         <div
-          className={cn(
-            "absolute top-0 left-0 right-0 h-10 pointer-events-none bg-gradient-to-b from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200",
-            showTopGradient ? "opacity-100" : "opacity-0",
-          )}
+          ref={topGradientRef}
+          className="absolute top-0 left-0 right-0 h-10 pointer-events-none bg-gradient-to-b from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200 opacity-0"
         />
 
         {/* Bottom gradient fade */}
         <div
-          className={cn(
-            "absolute bottom-0 left-0 right-0 h-12 pointer-events-none bg-gradient-to-t from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200",
-            showBottomGradient ? "opacity-100" : "opacity-0",
-          )}
+          ref={bottomGradientRef}
+          className="absolute bottom-0 left-0 right-0 h-12 pointer-events-none bg-gradient-to-t from-tl-background via-tl-background/50 to-transparent transition-opacity duration-200 opacity-0"
         />
       </div>
 
@@ -2533,6 +2623,16 @@ export function AgentsSidebar({
         onSave={handleRenameSave}
         currentName={renamingChat?.name || ""}
         isLoading={renameLoading}
+      />
+
+      {/* Confirm Archive Dialog */}
+      <ConfirmArchiveDialog
+        isOpen={confirmArchiveDialogOpen}
+        onClose={handleCloseArchiveDialog}
+        onConfirm={handleConfirmArchive}
+        activeProcessCount={activeProcessCount}
+        hasWorktree={hasWorktree}
+        uncommittedCount={uncommittedCount}
       />
     </>
   )

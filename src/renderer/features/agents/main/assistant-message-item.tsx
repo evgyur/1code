@@ -26,6 +26,11 @@ import {
   AgentMessageUsage,
   type AgentMessageMetadata,
 } from "../ui/agent-message-usage"
+import {
+  CopyButton,
+  PlayButton,
+  getMessageTextContent,
+} from "../ui/message-action-buttons"
 
 // Exploring tools - these get grouped when 3+ consecutive
 const EXPLORING_TOOLS = new Set([
@@ -134,13 +139,19 @@ export interface AssistantMessageItemProps {
   sandboxSetupStatus?: "cloning" | "ready" | "error"
 }
 
-// Cache for tracking previous text lengths per message (to detect AI SDK in-place mutations)
-const textLengthsCache = new Map<string, number[]>()
+// Cache for tracking previous message state per message (to detect AI SDK in-place mutations)
+// Stores both text lengths and tool input JSON strings for complete change detection
+interface MessageStateSnapshot {
+  textLengths: number[]
+  lastPartInputJson: string | undefined
+  lastPartState: string | undefined
+}
+const messageStateCache = new Map<string, MessageStateSnapshot>()
 
 // Custom comparison - check if message content actually changed
 // CRITICAL: AI SDK mutates objects in-place! So prev.message.parts[i].text === next.message.parts[i].text
 // even when text HAS changed (they're the same mutated object).
-// Solution: Cache text lengths externally and compare those.
+// Solution: Cache state externally and compare those.
 function areMessagePropsEqual(
   prev: AssistantMessageItemProps,
   next: AssistantMessageItemProps
@@ -160,33 +171,52 @@ function areMessagePropsEqual(
   if (prev.subChatId !== next.subChatId) return false
   if (prev.sandboxSetupStatus !== next.sandboxSetupStatus) return false
 
-  // Get current text lengths from the message parts
+  // Get current message state from parts
   const nextParts = next.message?.parts || []
-  const currentTextLengths = nextParts.map((p: any) =>
-    p.type === "text" ? (p.text?.length || 0) : -1
-  )
+  const lastPart = nextParts[nextParts.length - 1]
 
-  // Get cached text lengths from previous render
-  const cachedTextLengths = msgId ? textLengthsCache.get(msgId) : undefined
+  const currentState: MessageStateSnapshot = {
+    textLengths: nextParts.map((p: any) =>
+      p.type === "text" ? (p.text?.length || 0) : -1
+    ),
+    // Track tool input changes - this is critical for tool streaming!
+    lastPartInputJson: lastPart?.input ? JSON.stringify(lastPart.input) : undefined,
+    lastPartState: lastPart?.state,
+  }
+
+  // Get cached state from previous render
+  const cachedState = msgId ? messageStateCache.get(msgId) : undefined
 
   // If no cache, this is first comparison - cache and allow render
-  if (!cachedTextLengths) {
-    if (msgId) textLengthsCache.set(msgId, currentTextLengths)
+  if (!cachedState) {
+    if (msgId) messageStateCache.set(msgId, currentState)
     return false  // First render - must render
   }
 
   // Compare parts count
-  if (cachedTextLengths.length !== currentTextLengths.length) {
-    textLengthsCache.set(msgId!, currentTextLengths)
+  if (cachedState.textLengths.length !== currentState.textLengths.length) {
+    messageStateCache.set(msgId!, currentState)
     return false  // Parts count changed
   }
 
   // Compare text lengths (detects streaming text changes!)
-  for (let i = 0; i < currentTextLengths.length; i++) {
-    if (cachedTextLengths[i] !== currentTextLengths[i]) {
-      textLengthsCache.set(msgId!, currentTextLengths)
+  for (let i = 0; i < currentState.textLengths.length; i++) {
+    if (cachedState.textLengths[i] !== currentState.textLengths[i]) {
+      messageStateCache.set(msgId!, currentState)
       return false  // Text length changed = content changed
     }
+  }
+
+  // Compare last part's input (detects tool input streaming!)
+  if (cachedState.lastPartInputJson !== currentState.lastPartInputJson) {
+    messageStateCache.set(msgId!, currentState)
+    return false  // Tool input changed
+  }
+
+  // Compare last part's state
+  if (cachedState.lastPartState !== currentState.lastPartState) {
+    messageStateCache.set(msgId!, currentState)
+    return false  // Part state changed
   }
 
   // Nothing changed - skip re-render
@@ -346,6 +376,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           key={idx}
           text={part.text}
           messageId={message.id}
+          partIndex={idx}
           isFinalText={isFinalText}
           visibleStepsCount={visibleStepsCount}
           isStreaming={isTextStreaming}
@@ -358,10 +389,10 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
       return <AgentTaskTool key={idx} part={part} nestedTools={nestedTools} chatStatus={status} />
     }
 
-    if (part.type === "tool-Bash") return <AgentBashTool key={idx} part={part} chatStatus={status} />
+    if (part.type === "tool-Bash") return <AgentBashTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
     if (part.type === "tool-Thinking") return <AgentThinkingTool key={idx} part={part} chatStatus={status} />
-    if (part.type === "tool-Edit") return <AgentEditTool key={idx} part={part} chatStatus={status} />
-    if (part.type === "tool-Write") return <AgentEditTool key={idx} part={part} chatStatus={status} />
+    if (part.type === "tool-Edit") return <AgentEditTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
+    if (part.type === "tool-Write") return <AgentEditTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
     if (part.type === "tool-WebSearch") return <AgentWebSearchCollapsible key={idx} part={part} chatStatus={status} />
     if (part.type === "tool-WebFetch") return <AgentWebFetchTool key={idx} part={part} chatStatus={status} />
     if (part.type === "tool-PlanWrite") return <AgentPlanTool key={idx} part={part} chatStatus={status} />
@@ -423,7 +454,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     }
 
     return null
-  }, [nestedToolsMap, nestedToolIds, orphanToolCallIds, orphanFirstToolCallIds, orphanTaskGroups, finalTextIndex, visibleStepsCount, status, isLastMessage, isStreaming, subChatId])
+  }, [nestedToolsMap, nestedToolIds, orphanToolCallIds, orphanFirstToolCallIds, orphanTaskGroups, finalTextIndex, visibleStepsCount, status, isLastMessage, isStreaming, subChatId, message.id])
 
   if (!message) return null
 
@@ -490,7 +521,17 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
       </div>
 
       {(hasTextContent || hasPlan) && (!isStreaming || !isLastMessage) && (
-        <div className="flex justify-end items-center h-6 px-2 mt-1">
+        <div className="flex justify-between items-center h-6 px-2 mt-1">
+          <div className="flex items-center gap-0.5">
+            <CopyButton
+              text={hasPlan ? planText : getMessageTextContent(message)}
+              isMobile={isMobile}
+            />
+            <PlayButton
+              text={hasPlan ? planText : getMessageTextContent(message)}
+              isMobile={isMobile}
+            />
+          </div>
           <AgentMessageUsage metadata={msgMetadata} isStreaming={isStreaming} isMobile={isMobile} />
         </div>
       )}

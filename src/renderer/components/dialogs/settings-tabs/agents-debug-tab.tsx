@@ -126,6 +126,43 @@ export function AgentsDebugTab() {
     window.desktopApi?.toggleDevTools()
   }
 
+  const handleReactScanToggle = async (enabled: boolean) => {
+    if (!isDev) return
+
+    setReactScanLoading(true)
+    try {
+      if (enabled) {
+        await loadReactScan()
+        localStorage.setItem(REACT_SCAN_STORAGE_KEY, "true")
+        setReactScanEnabled(true)
+        toast.success("React Scan enabled", {
+          description: "Reload the page to see re-render highlights",
+        })
+      } else {
+        unloadReactScan()
+        localStorage.removeItem(REACT_SCAN_STORAGE_KEY)
+        setReactScanEnabled(false)
+        toast.success("React Scan disabled", {
+          description: "Reload the page to fully remove it",
+        })
+      }
+    } catch (error) {
+      toast.error("Failed to toggle React Scan")
+      console.error(error)
+    } finally {
+      setReactScanLoading(false)
+    }
+  }
+
+  // Initialize React Scan state from localStorage (dev only)
+  useEffect(() => {
+    if (isDev && localStorage.getItem(REACT_SCAN_STORAGE_KEY) === "true") {
+      loadReactScan()
+        .then(() => setReactScanEnabled(true))
+        .catch(console.error)
+    }
+  }, [isDev])
+
   const isLoading = isLoadingSystem || isLoadingDb
 
   return (
@@ -198,6 +235,33 @@ export function AgentsDebugTab() {
           <InfoRow label="Sub-chats" value={dbStats?.subChats?.toString()} isLoading={isLoading} />
         </div>
       </div>
+
+      {/* Developer Tools (dev mode only) */}
+      {isDev && (
+        <div className="space-y-3">
+          <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+            Developer Tools
+          </h4>
+          <div className="rounded-lg border bg-muted/30 divide-y">
+            <div className="flex items-center justify-between p-3">
+              <div className="flex items-center gap-2">
+                <Scan className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <span className="text-sm">React Scan</span>
+                  <p className="text-xs text-muted-foreground">
+                    Highlight component re-renders
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={reactScanEnabled}
+                onCheckedChange={handleReactScanToggle}
+                disabled={reactScanLoading}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="space-y-3">
