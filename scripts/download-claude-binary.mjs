@@ -151,9 +151,10 @@ async function getLatestVersion() {
     // Fallback
   }
 
-  // Fallback to known working version (2.0.61 has Windows support)
-  console.warn("Could not fetch latest version, using fallback: 2.0.61")
-  return "2.0.61"
+  // Fallback to known working version with Windows support
+  // Try 2.1.8 first (latest with Windows support), then 2.0.61
+  console.warn("Could not fetch latest version, trying fallback: 2.1.8")
+  return "2.1.8"
 }
 
 /**
@@ -241,17 +242,28 @@ async function main() {
   console.log("Claude Code Binary Downloader")
   console.log("=============================\n")
 
-  // Get version - for Windows, use known working version since 2.1.5 doesn't have Windows binaries
+  // Get version - try to get latest, with fallback for Windows if needed
   const currentPlatform = downloadAll ? null : `${process.platform}-${process.arch}`
   let version = specifiedVersion
   
   if (!version) {
+    version = await getLatestVersion()
+    
+    // For Windows, verify the version supports Windows, otherwise use fallback
     if (currentPlatform === "win32-x64") {
-      // Windows: use known working version (2.1.5 doesn't have Windows binaries)
-      console.log("Windows detected - using known working version 2.0.61")
-      version = "2.0.61"
-    } else {
-      version = await getLatestVersion()
+      try {
+        const manifestUrl = `${DIST_BASE}/${version}/manifest.json`
+        const manifest = await fetchJson(manifestUrl)
+        if (!manifest.platforms || !manifest.platforms["win32-x64"]) {
+          console.log(`Version ${version} doesn't support Windows, using fallback: 2.1.8`)
+          version = "2.1.8"
+        } else {
+          console.log(`Windows detected - using version ${version} (has Windows support)`)
+        }
+      } catch (error) {
+        console.log(`Failed to verify Windows support for ${version}, using fallback: 2.1.8`)
+        version = "2.1.8"
+      }
     }
   }
   
