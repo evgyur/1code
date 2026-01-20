@@ -859,6 +859,13 @@ export const claudeRouter = router({
                 if (msgAny.type === "error" || msgAny.error) {
                   const sdkError =
                     msgAny.error || msgAny.message || "Unknown SDK error"
+                  const sdkErrorPayload = {
+                    type: msgAny.type,
+                    error: msgAny.error,
+                    message: msgAny.message,
+                    code: msgAny.code,
+                    status: msgAny.status,
+                  }
                   lastError = new Error(sdkError)
 
                   // Categorize SDK-level errors
@@ -901,10 +908,11 @@ export const claudeRouter = router({
                   } else {
                     safeEmit({
                       type: "error",
-                      errorText: errorContext,
+                      errorText: `${errorContext}: ${sdkError}`,
                       debugInfo: {
                         category: errorCategory,
                         sdkError: sdkError,
+                        sdkErrorPayload,
                         sessionId: msgAny.session_id,
                         messageId: msgAny.message?.id,
                       },

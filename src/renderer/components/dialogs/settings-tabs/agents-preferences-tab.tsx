@@ -3,6 +3,7 @@ import { useState, useEffect } from "react"
 import {
   extendedThinkingEnabledAtom,
   soundNotificationsEnabledAtom,
+  desktopNotificationsEnabledAtom,
   analyticsOptOutAtom,
   ctrlTabTargetAtom,
   useNativeFrameAtom,
@@ -39,6 +40,7 @@ export function AgentsPreferencesTab() {
     extendedThinkingEnabledAtom,
   )
   const [soundEnabled, setSoundEnabled] = useAtom(soundNotificationsEnabledAtom)
+  const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useAtom(desktopNotificationsEnabledAtom)
   const [analyticsOptOut, setAnalyticsOptOut] = useAtom(analyticsOptOutAtom)
   const [ctrlTabTarget, setCtrlTabTarget] = useAtom(ctrlTabTargetAtom)
   const [useNativeFrame, setUseNativeFrame] = useAtom(useNativeFrameAtom)
@@ -121,6 +123,24 @@ export function AgentsPreferencesTab() {
             </div>
             <Switch checked={soundEnabled} onCheckedChange={setSoundEnabled} />
           </div>
+
+          {/* Desktop Notifications Toggle (Windows) */}
+          {isWindows && (
+            <div className="flex items-start justify-between">
+              <div className="flex flex-col space-y-1">
+                <span className="text-sm font-medium text-foreground">
+                  Desktop Notifications
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Show Windows desktop notification when agent completes work
+                </span>
+              </div>
+              <Switch
+                checked={desktopNotificationsEnabled}
+                onCheckedChange={setDesktopNotificationsEnabled}
+              />
+            </div>
+          )}
         </div>
       </div>
 

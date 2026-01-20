@@ -195,6 +195,14 @@ export const customClaudeConfigAtom = atomWithStorage<CustomClaudeConfig>(
   { getOnInit: true },
 )
 
+// Model-specific max output token limits discovered at runtime
+export const modelMaxOutputTokensAtom = atomWithStorage<Record<string, number>>(
+  "agents:modelMaxOutputTokens",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
 export function normalizeCustomClaudeConfig(
   config: CustomClaudeConfig,
 ): CustomClaudeConfig | undefined {
@@ -212,7 +220,7 @@ export function normalizeCustomClaudeConfig(
 // Note: Extended thinking disables response streaming
 export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
   "preferences:extended-thinking-enabled",
-  false,
+  true,
   undefined,
   { getOnInit: true },
 )
@@ -221,6 +229,15 @@ export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
 // When enabled, play a sound when agent completes work (if not viewing the chat)
 export const soundNotificationsEnabledAtom = atomWithStorage<boolean>(
   "preferences:sound-notifications-enabled",
+  true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Preferences - Desktop Notifications (Windows)
+// When enabled, show Windows desktop notification when agent completes work
+export const desktopNotificationsEnabledAtom = atomWithStorage<boolean>(
+  "preferences:desktop-notifications-enabled",
   true,
   undefined,
   { getOnInit: true },

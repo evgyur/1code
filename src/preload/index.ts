@@ -1,12 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron"
 import { exposeElectronTRPC } from "trpc-electron/main"
 
-// Only initialize Sentry in production to avoid IPC errors in dev mode
-if (process.env.NODE_ENV === "production") {
-  import("@sentry/electron/renderer").then((Sentry) => {
-    Sentry.init()
-  })
-}
+// Note: Sentry should NOT be initialized in preload script
+// Preload runs in isolated context and Sentry IPC won't work here
+// Sentry is initialized in main process and renderer process only
 
 // Expose tRPC IPC bridge for type-safe communication
 exposeElectronTRPC()
@@ -105,6 +102,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
 
   // Native features
   setBadge: (count: number | null) => ipcRenderer.invoke("app:set-badge", count),
+  setBadgeIcon: (imageData: string | null) => ipcRenderer.invoke("app:set-badge-icon", imageData),
   showNotification: (options: { title: string; body: string }) =>
     ipcRenderer.invoke("app:show-notification", options),
   openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url),
@@ -208,6 +206,7 @@ export interface DesktopApi {
   toggleDevTools: () => Promise<void>
   setAnalyticsOptOut: (optedOut: boolean) => Promise<void>
   setBadge: (count: number | null) => Promise<void>
+  setBadgeIcon: (imageData: string | null) => Promise<void>
   showNotification: (options: { title: string; body: string }) => Promise<void>
   openExternal: (url: string) => Promise<void>
   getApiBaseUrl: () => Promise<string>

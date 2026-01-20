@@ -7,6 +7,7 @@ import {
   clipboard,
   session,
   Menu,
+  nativeImage,
 } from "electron"
 import { join } from "path"
 import { readFileSync, existsSync } from "fs"
@@ -63,15 +64,64 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
   })
   // Note: Update checking is now handled by auto-updater module (lib/auto-updater.ts)
   ipcMain.handle("app:set-badge", (_event, count: number | null) => {
+    const win = getWindow()
     if (process.platform === "darwin") {
+      // macOS: Use dock badge
       app.dock.setBadge(count ? String(count) : "")
+    } else if (process.platform === "win32" && win) {
+      // Windows: Use overlay icon with number badge
+      if (count !== null && count > 0) {
+        // Request badge icon from renderer (it will generate and send via IPC)
+        // For now, show count in window title as fallback
+        win.setTitle(`1Code (${count})`)
+        // The actual overlay icon will be set when renderer sends the image data
+      } else {
+        win.setTitle("1Code")
+        // Clear overlay icon
+        win.setOverlayIcon(null, "")
+      }
+    }
+  })
+  
+  // Handle badge icon data from renderer (Windows overlay icon)
+  ipcMain.handle("app:set-badge-icon", (_event, imageData: string | null) => {
+    const win = getWindow()
+    if (process.platform === "win32" && win) {
+      if (imageData) {
+        // Convert data URL to native image
+        const image = nativeImage.createFromDataURL(imageData)
+        win.setOverlayIcon(image, `${imageData ? "New messages" : ""}`)
+      } else {
+        win.setOverlayIcon(null, "")
+      }
     }
   })
   ipcMain.handle(
     "app:show-notification",
     (_event, options: { title: string; body: string }) => {
       const { Notification } = require("electron")
-      new Notification(options).show()
+      // Electron Notification uses native Windows Notification API
+      // This will show a standard Windows desktop notification
+      const notification = new Notification({
+        title: options.title,
+        body: options.body,
+        // Windows-specific options
+        ...(process.platform === "win32" && {
+          // Use Windows 10+ action center
+          silent: false, // Play notification sound
+        }),
+      })
+      notification.show()
+      
+      // Optional: Handle notification click
+      notification.on("click", () => {
+        // Focus the main window when notification is clicked
+        const win = getWindow()
+        if (win) {
+          if (win.isMinimized()) win.restore()
+          win.focus()
+        }
+      })
     },
   )
 

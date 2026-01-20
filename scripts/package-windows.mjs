@@ -8,7 +8,8 @@
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync, copyFileSync } from 'fs'
+import { execSync } from 'child_process'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -111,6 +112,35 @@ electronBuilder.on('close', (code) => {
     console.log('   Please close 1Code.exe and try again')
     process.exit(1)
   } else if (existsSync(exePath)) {
+    // Fix: Ensure better-sqlite3 build directory is complete
+    const betterSqlite3BuildSource = join(projectRoot, 'node_modules', 'better-sqlite3', 'build')
+    const betterSqlite3BuildDest = join(projectRoot, 'release', 'win-unpacked', 'resources', 'app.asar.unpacked', 'node_modules', 'better-sqlite3', 'build')
+    const betterSqlite3NodeFile = join(betterSqlite3BuildDest, 'Release', 'better_sqlite3.node')
+
+    if (existsSync(betterSqlite3BuildSource) && !existsSync(betterSqlite3NodeFile)) {
+      try {
+        // Use robocopy to copy entire build directory structure
+        const robocopyCmd = `robocopy "${betterSqlite3BuildSource}" "${betterSqlite3BuildDest}" /E /NFL /NDL /NJH /NJS`
+        execSync(robocopyCmd, { cwd: projectRoot, stdio: 'ignore' })
+        if (existsSync(betterSqlite3NodeFile)) {
+          console.log('\n✓ Fixed: Copied better-sqlite3 build directory')
+        }
+      } catch (err) {
+        // Fallback: try manual copy
+        try {
+          const betterSqlite3Source = join(betterSqlite3BuildSource, 'Release', 'better_sqlite3.node')
+          const betterSqlite3DestDir = join(betterSqlite3BuildDest, 'Release')
+          if (existsSync(betterSqlite3Source)) {
+            mkdirSync(betterSqlite3DestDir, { recursive: true })
+            copyFileSync(betterSqlite3Source, betterSqlite3NodeFile)
+            console.log('\n✓ Fixed: Copied better-sqlite3 native bindings')
+          }
+        } catch (err2) {
+          console.log('\n⚠️  Warning: Could not copy better-sqlite3 native bindings:', err2.message)
+        }
+      }
+    }
+
     console.log('\n✅ Build completed successfully!')
     console.log(`   Executable: ${exePath}`)
     process.exit(0)
