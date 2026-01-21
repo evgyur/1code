@@ -1,7 +1,7 @@
 "use client"
 
-import { memo, useState, useEffect, useCallback, useRef } from "react"
-import { ChevronUp, ChevronDown, CornerDownLeft, Send } from "lucide-react"
+import { memo, useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from "react"
+import { ChevronUp, ChevronDown, CornerDownLeft } from "lucide-react"
 import { Button } from "../../../components/ui/button"
 import { cn } from "../../../lib/utils"
 import type { PendingUserQuestions } from "../atoms"
@@ -11,16 +11,19 @@ interface AgentUserQuestionProps {
   onAnswer: (answers: Record<string, string>) => void
   onSkip: () => void
   hasCustomText?: boolean
-  onAnswerWithCustomText?: (answers: Record<string, string>) => void
 }
 
-export const AgentUserQuestion = memo(function AgentUserQuestion({
-  pendingQuestions,
-  onAnswer,
-  onSkip,
-  hasCustomText = false,
-  onAnswerWithCustomText,
-}: AgentUserQuestionProps) {
+export interface AgentUserQuestionHandle {
+  getAnswers: () => Record<string, string>
+}
+
+export const AgentUserQuestion = memo(forwardRef<AgentUserQuestionHandle, AgentUserQuestionProps>(
+  function AgentUserQuestion({
+    pendingQuestions,
+    onAnswer,
+    onSkip,
+    hasCustomText = false,
+  }: AgentUserQuestionProps, ref) {
   const { questions, toolUseId } = pendingQuestions
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string[]>>({})
@@ -29,6 +32,20 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const prevIndexRef = useRef(currentQuestionIndex)
   const prevToolUseIdRef = useRef(toolUseId)
+
+  // Expose getAnswers method to parent via ref
+  useImperativeHandle(ref, () => ({
+    getAnswers: () => {
+      const formattedAnswers: Record<string, string> = {}
+      for (const question of questions) {
+        const selected = answers[question.question] || []
+        if (selected.length > 0) {
+          formattedAnswers[question.question] = selected.join(", ")
+        }
+      }
+      return formattedAnswers
+    }
+  }), [answers, questions])
 
   // Reset when toolUseId changes (new question set)
   useEffect(() => {
@@ -159,21 +176,6 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
     setIsSubmitting(true)
     onSkip()
   }, [isSubmitting, onSkip])
-
-  // Handle sending answers with custom text from the main input
-  const handleSendWithCustomText = useCallback(() => {
-    if (isSubmitting || !onAnswerWithCustomText) return
-    setIsSubmitting(true)
-
-    // Convert current answers to SDK format
-    const formattedAnswers: Record<string, string> = {}
-    for (const question of questions) {
-      const selected = answers[question.question] || []
-      formattedAnswers[question.question] = selected.join(", ")
-    }
-
-    onAnswerWithCustomText(formattedAnswers)
-  }, [isSubmitting, onAnswerWithCustomText, questions, answers])
 
   const getOptionNumber = (index: number) => {
     return String(index + 1)
@@ -379,24 +381,16 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
         </Button>
         <Button
           size="sm"
-          onClick={hasCustomText ? handleSendWithCustomText : handleContinue}
+          onClick={handleContinue}
           disabled={
             isSubmitting ||
-            (hasCustomText
-              ? false
-              : isLastQuestion
-                ? !allQuestionsAnswered
-                : !currentQuestionHasAnswer)
+            hasCustomText ||
+            (isLastQuestion ? !allQuestionsAnswered : !currentQuestionHasAnswer)
           }
           className="h-6 text-xs px-3 rounded-md"
         >
           {isSubmitting ? (
             "Sending..."
-          ) : hasCustomText ? (
-            <>
-              Send
-              <Send className="w-3 h-3 ml-1 opacity-60" />
-            </>
           ) : (
             <>
               {isLastQuestion ? "Submit" : "Continue"}
@@ -407,4 +401,4 @@ export const AgentUserQuestion = memo(function AgentUserQuestion({
       </div>
     </div>
   )
-})
+}))

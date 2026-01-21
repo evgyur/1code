@@ -10,6 +10,7 @@ import {
 } from "../../../components/ui/tooltip"
 import { cn } from "../../../lib/utils"
 import type { AgentQueueItem } from "../lib/queue-utils"
+import { RenderFileMentions } from "../mentions/render-file-mentions"
 
 const QUEUE_EXPANDED_KEY = "agent-queue-expanded"
 
@@ -48,7 +49,9 @@ const QueueItemRow = memo(function QueueItemRow({
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors cursor-default">
-      <span className="truncate flex-1 text-foreground">{item.message}</span>
+      <span className="truncate flex-1 text-foreground">
+          <RenderFileMentions text={item.message} />
+        </span>
       {hasAttachments && (
         <span className="flex-shrink-0 text-muted-foreground text-[10px]">
           +{attachmentCount} {attachmentCount === 1 ? "file" : "files"}

@@ -1,36 +1,35 @@
 "use client"
 
-import { memo, useMemo, useState, useCallback } from "react"
+import { useAtomValue } from "jotai"
 import { ListTree } from "lucide-react"
+import { memo, useCallback, useMemo, useState } from "react"
 
+import { CollapseIcon, ExpandIcon, IconTextUndo } from "../../../components/ui/icons"
 import { cn } from "../../../lib/utils"
-import {
-  CollapseIcon,
-  ExpandIcon,
-} from "../../../components/ui/icons"
-import { MemoizedTextPart } from "./memoized-text-part"
+import { isRollingBackAtom, rollbackHandlerAtom } from "../stores/message-store"
+import { AgentAskUserQuestionTool } from "../ui/agent-ask-user-question-tool"
 import { AgentBashTool } from "../ui/agent-bash-tool"
 import { AgentEditTool } from "../ui/agent-edit-tool"
-import { AgentTaskTool } from "../ui/agent-task-tool"
-import { AgentThinkingTool } from "../ui/agent-thinking-tool"
-import { AgentPlanTool } from "../ui/agent-plan-tool"
-import { AgentTodoTool } from "../ui/agent-todo-tool"
-import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
-import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
-import { AgentExploringGroup } from "../ui/agent-exploring-group"
 import { AgentExitPlanModeTool } from "../ui/agent-exit-plan-mode-tool"
-import { AgentAskUserQuestionTool } from "../ui/agent-ask-user-question-tool"
-import { AgentToolCall } from "../ui/agent-tool-call"
-import { AgentToolRegistry, getToolStatus } from "../ui/agent-tool-registry"
+import { AgentExploringGroup } from "../ui/agent-exploring-group"
 import {
   AgentMessageUsage,
   type AgentMessageMetadata,
 } from "../ui/agent-message-usage"
+import { AgentPlanTool } from "../ui/agent-plan-tool"
+import { AgentTaskTool } from "../ui/agent-task-tool"
+import { AgentThinkingTool } from "../ui/agent-thinking-tool"
+import { AgentTodoTool } from "../ui/agent-todo-tool"
+import { AgentToolCall } from "../ui/agent-tool-call"
+import { AgentToolRegistry, getToolStatus } from "../ui/agent-tool-registry"
+import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
+import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
 import {
   CopyButton,
   PlayButton,
   getMessageTextContent,
 } from "../ui/message-action-buttons"
+import { MemoizedTextPart } from "./memoized-text-part"
 
 // Exploring tools - these get grouped when 3+ consecutive
 const EXPLORING_TOOLS = new Set([
@@ -232,6 +231,8 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   subChatId,
   sandboxSetupStatus = "ready",
 }: AssistantMessageItemProps) {
+  const onRollback = useAtomValue(rollbackHandlerAtom)
+  const isRollingBack = useAtomValue(isRollingBackAtom)
   const messageParts = message?.parts || []
 
   const contentParts = useMemo(() =>
@@ -531,6 +532,19 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
               text={hasPlan ? planText : getMessageTextContent(message)}
               isMobile={isMobile}
             />
+            {onRollback && (message.metadata as any)?.sdkMessageUuid && (
+              <button
+                onClick={() => onRollback(message)}
+                disabled={isStreaming || isRollingBack}
+                tabIndex={-1}
+                className={cn(
+                  "p-1.5 rounded-md transition-[background-color,transform] duration-150 ease-out hover:bg-accent active:scale-[0.97]",
+                  (isStreaming || isRollingBack) && "opacity-50 cursor-not-allowed",
+                )}
+              >
+                <IconTextUndo className="w-3.5 h-3.5 text-muted-foreground" />
+              </button>
+            )}
           </div>
           <AgentMessageUsage metadata={msgMetadata} isStreaming={isStreaming} isMobile={isMobile} />
         </div>

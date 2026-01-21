@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect, memo } from "react"
+import { useState, useRef, useEffect, memo, useMemo } from "react"
 import { cn } from "../../../lib/utils"
 import { useOverflowDetection } from "../../../hooks/use-overflow-detection"
 import {
@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog"
 import { AgentImageItem } from "./agent-image-item"
-import { RenderFileMentions } from "../mentions/render-file-mentions"
+import { RenderFileMentions, extractTextMentions, TextMentionBlocks } from "../mentions/render-file-mentions"
 import { useSearchHighlight, useSearchQuery } from "../search"
 
 interface AgentUserMessageBubbleProps {
@@ -22,6 +22,8 @@ interface AgentUserMessageBubbleProps {
       url?: string
     }
   }>
+  /** If true, renders only images and text - no TextMentionBlocks (they're rendered by parent) */
+  skipTextMentionBlocks?: boolean
 }
 
 // Helper function to highlight text in DOM using TreeWalker
@@ -112,9 +114,16 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
   messageId,
   textContent,
   imageParts = [],
+  skipTextMentionBlocks = false,
 }: AgentUserMessageBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
+
+  // Extract quote/diff mentions to display above the bubble
+  const { textMentions, cleanedText } = useMemo(
+    () => extractTextMentions(textContent),
+    [textContent]
+  )
 
   // VS Code style overflow detection using ResizeObserver (no layout thrashing)
   const showGradient = useOverflowDetection(contentRef, [textContent])
@@ -205,8 +214,12 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
               })()}
             </div>
           )}
+          {/* Show text mentions (quote/diff) as blocks above text bubble - only if not rendered by parent */}
+          {!skipTextMentionBlocks && textMentions.length > 0 && (
+            <TextMentionBlocks mentions={textMentions} />
+          )}
           {/* Text bubble with overflow detection */}
-          {textContent && (
+          {cleanedText ? (
             <div
               ref={contentRef}
               onClick={() => showGradient && !hasCurrentSearchHighlight && setIsExpanded(true)}
@@ -221,13 +234,19 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
               data-part-index={0}
               data-part-type="text"
             >
-              <RenderFileMentions text={textContent} />
+              <RenderFileMentions text={cleanedText} />
               {/* Show gradient only when collapsed and not searching in this message */}
               {showGradient && !hasCurrentSearchHighlight && (
                 <div className="absolute bottom-0 left-0 right-0 h-10 pointer-events-none bg-gradient-to-t from-[hsl(var(--input-background))] to-transparent rounded-b-xl" />
               )}
             </div>
-          )}
+          ) : imageParts.length > 0 || textMentions.length > 0 ? (
+            imageParts.length > 0 && textMentions.length === 0 ? (
+              <span className="text-xs text-muted-foreground italic">
+                Using {imageParts.length === 1 ? "image" : `${imageParts.length} images`}
+              </span>
+            ) : null
+          ) : null}
         </div>
       </div>
 
@@ -239,8 +258,13 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
               Full message
             </DialogTitle>
           </DialogHeader>
-          <div className="whitespace-pre-wrap text-sm">
-            <RenderFileMentions text={textContent} />
+          <div className="space-y-3">
+            {textMentions.length > 0 && (
+              <TextMentionBlocks mentions={textMentions} />
+            )}
+            <div className="whitespace-pre-wrap text-sm">
+              <RenderFileMentions text={cleanedText} />
+            </div>
           </div>
         </DialogContent>
       </Dialog>

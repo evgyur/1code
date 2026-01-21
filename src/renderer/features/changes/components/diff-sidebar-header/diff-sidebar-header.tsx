@@ -24,13 +24,13 @@ import { SearchCombobox } from "../../../../components/ui/search-combobox";
 import { PopoverTrigger } from "../../../../components/ui/popover";
 import { IconCloseSidebarRight, IconFetch, IconForcePush, IconSpinner, AgentIcon, CircleFilterIcon, IconReview, ExternalLinkIcon } from "../../../../components/ui/icons";
 import { DiffViewModeSwitcher } from "./diff-view-mode-switcher";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { HiArrowPath, HiChevronDown } from "react-icons/hi2";
 import { LuGitBranch } from "react-icons/lu";
 import {
 	ArrowDown,
 	ArrowUp,
-	ChevronDown,
+	Check,
 	ChevronsDownUp,
 	ChevronsUpDown,
 	Columns2,
@@ -39,6 +39,7 @@ import {
 	GitPullRequest,
 	MoreHorizontal,
 	Rows2,
+	Square,
 	Upload,
 	X,
 } from "lucide-react";
@@ -94,6 +95,10 @@ interface DiffSidebarHeaderProps {
 	onCollapseAll?: () => void;
 	viewMode?: DiffModeEnum;
 	onViewModeChange?: (mode: DiffModeEnum) => void;
+	// Viewed files controls
+	viewedCount?: number;
+	onMarkAllViewed?: () => void;
+	onMarkAllUnviewed?: () => void;
 	// Desktop window drag region
 	isDesktop?: boolean;
 	isFullscreen?: boolean;
@@ -113,7 +118,7 @@ function formatTimeSince(date: Date): string {
 	return `${days}d ago`;
 }
 
-export function DiffSidebarHeader({
+export const DiffSidebarHeader = memo(function DiffSidebarHeader({
 	worktreePath,
 	currentBranch,
 	diffStats,
@@ -142,6 +147,9 @@ export function DiffSidebarHeader({
 	onCollapseAll,
 	viewMode = DiffModeEnum.Unified,
 	onViewModeChange,
+	viewedCount = 0,
+	onMarkAllViewed,
+	onMarkAllUnviewed,
 	isDesktop = false,
 	isFullscreen = false,
 	displayMode = "side-peek",
@@ -592,9 +600,9 @@ export function DiffSidebarHeader({
 					</Tooltip>
 				)}
 
-				{/* Split Button: Primary action + dropdown trigger */}
-				<div className="inline-flex -space-x-px rounded-md">
-					{/* Main action button */}
+				{/* Primary action button (solo when Fetch/Open PR, split when Push/Pull/Create PR) */}
+				{displayAction.label === "Fetch" || displayAction.label === "Fetching" || displayAction.label === "Open PR" ? (
+					// Solo button - no dropdown (for Fetch and Open PR)
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<button
@@ -604,7 +612,7 @@ export function DiffSidebarHeader({
 									"inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-colors",
 									"outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/70",
 									"disabled:pointer-events-none disabled:opacity-50",
-									"h-6 px-2 gap-1 text-xs rounded-l-md rounded-r-none focus:z-10 overflow-hidden",
+									"h-6 px-2 gap-1 text-xs rounded-md focus:z-10 overflow-hidden",
 									"transition-all duration-200 ease-out",
 									displayAction.variant === "default"
 										? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] dark:shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(0,0,0,0.14)]"
@@ -616,6 +624,11 @@ export function DiffSidebarHeader({
 										<>
 											<IconSpinner className="size-3.5 ml-0.5 shrink-0" />
 											{displayAction.pendingLabel && <span className="mr-0.5 truncate">{displayAction.pendingLabel}</span>}
+											{displayAction.badge && (
+												<span className="text-[10px] bg-primary-foreground/20 px-1.5 py-0.5 rounded font-medium ml-1 shrink-0">
+													{displayAction.badge}
+												</span>
+											)}
 										</>
 									) : (
 										<>
@@ -633,185 +646,232 @@ export function DiffSidebarHeader({
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{displayAction.tooltip}</TooltipContent>
 					</Tooltip>
-
-					{/* Dropdown trigger for git operations */}
-					<DropdownMenu>
-						<DropdownMenuTrigger asChild>
-							<Button
-								variant={displayAction.variant === "default" ? "default" : "ghost"}
-								size="sm"
-								disabled={displayAction.isPending}
-								className={cn(
-									"h-6 w-6 p-0 rounded-l-none rounded-r-md focus:z-10",
-									displayAction.variant === "ghost" && "hover:bg-accent hover:text-accent-foreground shadow-none"
-								)}
-								aria-label="More git options"
-							>
-								<ChevronDown className="size-3.5" />
-							</Button>
-						</DropdownMenuTrigger>
-						<DropdownMenuContent align="end" className="w-52">
-							{/* Fetch - always available */}
-							<DropdownMenuItem
-								onClick={handleFetch}
-								disabled={isFetchPending}
-								className="text-xs"
-							>
-								<HiArrowPath className={cn("mr-2 size-3.5", isFetchPending && "animate-spin")} />
-								<div className="flex-1">
-									<div>Fetch origin</div>
-									<div className="text-[10px] text-muted-foreground">
-										{lastFetchTime ? `Last fetched ${displayTime}` : "Check for updates"}
-									</div>
-								</div>
-							</DropdownMenuItem>
-
-							{/* Force Push - only if branch is published AND there's something to force push (pushCount > 0 or behind remote) */}
-							{hasUpstream && pushCount > 0 && (
-								<DropdownMenuItem
-									onClick={handleForcePush}
-									disabled={forcePushMutation.isPending}
-									className="text-xs data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-400 [&_div]:data-[highlighted]:text-red-400/70"
-								>
-									<IconForcePush className="mr-2 size-3.5" />
-									<div className="flex-1">
-										<div>Force push</div>
-										<div className="text-[10px] text-muted-foreground/70">
-											Overwrite remote (dangerous)
-										</div>
-									</div>
-								</DropdownMenuItem>
-							)}
-
-							{/* Merge/Rebase from default branch - only if not on default branch and branch is published */}
-							{!isDefaultBranch && hasUpstream && (
-								<>
-									<DropdownMenuSeparator />
-									<DropdownMenuItem
-										onClick={() => handleMergeFromDefault(false)}
-										disabled={mergeFromDefaultMutation.isPending || behindDefault === 0}
-										className="text-xs"
-									>
-										<GitMerge className="mr-2 size-3.5" />
-										<div className="flex-1">
-											<div>Merge from {branchData?.defaultBranch || "main"}</div>
-											<div className="text-[10px] text-muted-foreground">
-												{behindDefault > 0
-													? `${behindDefault} commit${behindDefault !== 1 ? "s" : ""} to merge`
-													: "Already up to date"}
-											</div>
-										</div>
-										{behindDefault > 0 && (
-											<span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium ml-2">
-												↓{behindDefault}
-											</span>
-										)}
-									</DropdownMenuItem>
-									<DropdownMenuItem
-										onClick={() => handleMergeFromDefault(true)}
-										disabled={mergeFromDefaultMutation.isPending || behindDefault === 0}
-										className="text-xs"
-									>
-										<GitMerge className="mr-2 size-3.5" />
-										<div className="flex-1">
-											<div>Rebase on {branchData?.defaultBranch || "main"}</div>
-											<div className="text-[10px] text-muted-foreground">
-												{behindDefault > 0
-													? `Replay on top of ${behindDefault} commit${behindDefault !== 1 ? "s" : ""}`
-													: "Already up to date"}
-											</div>
-										</div>
-										{behindDefault > 0 && (
-											<span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium ml-2">
-												↓{behindDefault}
-											</span>
-										)}
-									</DropdownMenuItem>
-								</>
-							)}
-
-							{/* Separator before PR actions - only if there are PR actions to show (not already shown as primary) */}
-							{((hasUpstream && !pr && onCreatePr && !isDefaultBranch && primaryAction.label !== "Create PR") || (hasUpstream && !pr && onCreatePrWithAI && !isDefaultBranch) || pr || (hasPrNumber && isPrOpen && onMergePr)) && (
-								<DropdownMenuSeparator />
-							)}
-
-							{/* Create PR - if no PR, branch is published, not on default branch, AND not already primary action */}
-							{hasUpstream && !pr && onCreatePr && !isDefaultBranch && primaryAction.label !== "Create PR" && (
-								<DropdownMenuItem
-									onClick={onCreatePr}
-									disabled={isCreatingPr || aheadOfDefault === 0}
-									className="text-xs"
-								>
-									<GitPullRequest className="mr-2 size-3.5" />
-									<div className="flex-1">
-										<div>{isCreatingPr ? "Creating..." : "Create Pull Request"}</div>
-										{aheadOfDefault === 0 && (
-											<div className="text-[10px] text-muted-foreground">
-												No commits to merge into {branchData?.defaultBranch || "main"}
-											</div>
-										)}
-									</div>
-									{aheadOfDefault > 0 && (
-										<span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium ml-2">
-											↑{aheadOfDefault}
-										</span>
+				) : (
+					// Split button with dropdown for Push/Pull/PR actions
+					<div className="inline-flex -space-x-px rounded-md">
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									onClick={displayAction.handler}
+									disabled={displayAction.isPending || displayAction.disabled}
+									className={cn(
+										"inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-colors",
+										"outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary/70",
+										"disabled:pointer-events-none disabled:opacity-50",
+										"h-6 px-2 gap-1 text-xs rounded-l-md rounded-r-none focus:z-10 overflow-hidden",
+										"transition-all duration-200 ease-out",
+										displayAction.variant === "default"
+											? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] dark:shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(0,0,0,0.14)]"
+											: "hover:bg-accent hover:text-accent-foreground"
 									)}
-								</DropdownMenuItem>
-							)}
+								>
+									<span className="flex items-center gap-1 transition-opacity duration-150 min-w-0">
+										{displayAction.isPending ? (
+											<>
+												<IconSpinner className="size-3.5 ml-0.5 shrink-0" />
+												{displayAction.pendingLabel && <span className="mr-0.5 truncate">{displayAction.pendingLabel}</span>}
+												{displayAction.badge && (
+													<span className="text-[10px] bg-primary-foreground/20 px-1.5 py-0.5 rounded font-medium ml-1 shrink-0">
+														{displayAction.badge}
+													</span>
+												)}
+											</>
+										) : (
+											<>
+												<span className="shrink-0">{displayAction.icon}</span>
+												{displayAction.label && <span className="truncate">{displayAction.label}</span>}
+												{displayAction.badge && (
+													<span className="text-[10px] bg-primary-foreground/20 px-1.5 py-0.5 rounded font-medium ml-1 shrink-0">
+														{displayAction.badge}
+													</span>
+												)}
+											</>
+										)}
+									</span>
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{displayAction.tooltip}</TooltipContent>
+						</Tooltip>
 
-							{/* Create PR with AI - if no PR, branch is published, not on default branch */}
-							{hasUpstream && !pr && onCreatePrWithAI && !isDefaultBranch && (
+						{/* Dropdown trigger for git operations */}
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									variant={displayAction.variant === "default" ? "default" : "ghost"}
+									size="sm"
+									disabled={displayAction.isPending}
+									className={cn(
+										"h-6 w-6 p-0 rounded-l-none rounded-r-md focus:z-10",
+										displayAction.variant === "ghost" && "hover:bg-accent hover:text-accent-foreground shadow-none"
+									)}
+									aria-label="More git options"
+								>
+									<HiChevronDown className="size-3" />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end" className="w-52">
+								{/* Fetch - available when primary action is NOT Fetch */}
 								<DropdownMenuItem
-									onClick={onCreatePrWithAI}
-									disabled={isCreatingPrWithAI}
+									onClick={handleFetch}
+									disabled={isFetchPending}
 									className="text-xs"
 								>
-									<GitPullRequest className="mr-2 size-3.5" />
+									<HiArrowPath className={cn("mr-2 size-3.5", isFetchPending && "animate-spin")} />
 									<div className="flex-1">
-										<div>{isCreatingPrWithAI ? "Creating..." : "Create PR with AI"}</div>
+										<div>Fetch origin</div>
 										<div className="text-[10px] text-muted-foreground">
-											Let AI create and push PR
+											{lastFetchTime ? `Last fetched ${displayTime}` : "Check for updates"}
 										</div>
 									</div>
 								</DropdownMenuItem>
-							)}
 
-							{/* Open PR - if PR exists AND not already primary action */}
-							{pr && primaryAction.label !== "Open PR" && (
-								<DropdownMenuItem
-									onClick={handleOpenPR}
-									className="text-xs"
-								>
-									<ExternalLinkIcon className="mr-2 size-3.5" />
-									<span>Open Pull Request #{pr.number}</span>
-								</DropdownMenuItem>
-							)}
+								{/* Force Push - only when history diverged (remote has commits we don't have locally) */}
+								{hasUpstream && pullCount > 0 && (
+									<DropdownMenuItem
+										onClick={handleForcePush}
+										disabled={forcePushMutation.isPending}
+										className="text-xs data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-400 [&_div]:data-[highlighted]:text-red-400/70"
+									>
+										<IconForcePush className="mr-2 size-3.5" />
+										<div className="flex-1">
+											<div>Force push</div>
+											<div className="text-[10px] text-muted-foreground/70">
+												Overwrite remote (dangerous)
+											</div>
+										</div>
+									</DropdownMenuItem>
+								)}
 
-							{/* Merge PR - if PR is open and no conflicts */}
-							{hasPrNumber && isPrOpen && onMergePr && !hasMergeConflicts && (
-								<DropdownMenuItem
-									onClick={onMergePr}
-									disabled={isMergingPr}
-									className="text-xs"
-								>
-									<GitMerge className="mr-2 size-3.5" />
-									<span>{isMergingPr ? "Merging..." : "Merge Pull Request"}</span>
-								</DropdownMenuItem>
-							)}
+								{/* Merge/Rebase from default branch */}
+								{!isDefaultBranch && hasUpstream && (
+									<>
+										<DropdownMenuSeparator />
+										<DropdownMenuItem
+											onClick={() => handleMergeFromDefault(false)}
+											disabled={mergeFromDefaultMutation.isPending || behindDefault === 0}
+											className="text-xs"
+										>
+											<GitMerge className="mr-2 size-3.5" />
+											<div className="flex-1">
+												<div>Merge from {branchData?.defaultBranch || "main"}</div>
+												<div className="text-[10px] text-muted-foreground">
+													{behindDefault > 0
+														? `${behindDefault} commit${behindDefault !== 1 ? "s" : ""} to merge`
+														: "Already up to date"}
+												</div>
+											</div>
+											{behindDefault > 0 && (
+												<span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium ml-2">
+													↓{behindDefault}
+												</span>
+											)}
+										</DropdownMenuItem>
+										<DropdownMenuItem
+											onClick={() => handleMergeFromDefault(true)}
+											disabled={mergeFromDefaultMutation.isPending || behindDefault === 0}
+											className="text-xs"
+										>
+											<GitMerge className="mr-2 size-3.5" />
+											<div className="flex-1">
+												<div>Rebase on {branchData?.defaultBranch || "main"}</div>
+												<div className="text-[10px] text-muted-foreground">
+													{behindDefault > 0
+														? `Replay on top of ${behindDefault} commit${behindDefault !== 1 ? "s" : ""}`
+														: "Already up to date"}
+												</div>
+											</div>
+											{behindDefault > 0 && (
+												<span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium ml-2">
+													↓{behindDefault}
+												</span>
+											)}
+										</DropdownMenuItem>
+									</>
+								)}
 
-							{/* Fix Conflicts - if PR has merge conflicts */}
-							{hasPrNumber && isPrOpen && hasMergeConflicts && onFixConflicts && (
-								<DropdownMenuItem
-									onClick={onFixConflicts}
-									className="text-xs text-yellow-600 dark:text-yellow-500"
-								>
-									<GitMerge className="mr-2 size-3.5" />
-									<span>Fix Merge Conflicts</span>
-								</DropdownMenuItem>
-							)}
-						</DropdownMenuContent>
-					</DropdownMenu>
-				</div>
+								{/* PR actions separator */}
+								{((hasUpstream && !pr && onCreatePr && !isDefaultBranch && primaryAction.label !== "Create PR") || (hasUpstream && !pr && onCreatePrWithAI && !isDefaultBranch) || pr || (hasPrNumber && isPrOpen && onMergePr)) && (
+									<DropdownMenuSeparator />
+								)}
+
+								{/* Create PR */}
+								{hasUpstream && !pr && onCreatePr && !isDefaultBranch && primaryAction.label !== "Create PR" && (
+									<DropdownMenuItem
+										onClick={onCreatePr}
+										disabled={isCreatingPr || aheadOfDefault === 0}
+										className="text-xs"
+									>
+										<GitPullRequest className="mr-2 size-3.5" />
+										<div className="flex-1">
+											<div>{isCreatingPr ? "Creating..." : "Create Pull Request"}</div>
+											{aheadOfDefault === 0 && (
+												<div className="text-[10px] text-muted-foreground">
+													No commits to merge into {branchData?.defaultBranch || "main"}
+												</div>
+											)}
+										</div>
+										{aheadOfDefault > 0 && (
+											<span className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium ml-2">
+												↑{aheadOfDefault}
+											</span>
+										)}
+									</DropdownMenuItem>
+								)}
+
+								{/* Create PR with AI */}
+								{hasUpstream && !pr && onCreatePrWithAI && !isDefaultBranch && (
+									<DropdownMenuItem
+										onClick={onCreatePrWithAI}
+										disabled={isCreatingPrWithAI}
+										className="text-xs"
+									>
+										<GitPullRequest className="mr-2 size-3.5" />
+										<div className="flex-1">
+											<div>{isCreatingPrWithAI ? "Creating..." : "Create PR with AI"}</div>
+											<div className="text-[10px] text-muted-foreground">
+												Let AI create and push PR
+											</div>
+										</div>
+									</DropdownMenuItem>
+								)}
+
+								{/* Open PR */}
+								{pr && primaryAction.label !== "Open PR" && (
+									<DropdownMenuItem
+										onClick={handleOpenPR}
+										className="text-xs"
+									>
+										<ExternalLinkIcon className="mr-2 size-3.5" />
+										<span>Open Pull Request #{pr.number}</span>
+									</DropdownMenuItem>
+								)}
+
+								{/* Merge PR */}
+								{hasPrNumber && isPrOpen && onMergePr && !hasMergeConflicts && (
+									<DropdownMenuItem
+										onClick={onMergePr}
+										disabled={isMergingPr}
+										className="text-xs"
+									>
+										<GitMerge className="mr-2 size-3.5" />
+										<span>{isMergingPr ? "Merging..." : "Merge Pull Request"}</span>
+									</DropdownMenuItem>
+								)}
+
+								{/* Fix Conflicts */}
+								{hasPrNumber && isPrOpen && hasMergeConflicts && onFixConflicts && (
+									<DropdownMenuItem
+										onClick={onFixConflicts}
+										className="text-xs text-yellow-600 dark:text-yellow-500"
+									>
+										<GitMerge className="mr-2 size-3.5" />
+										<span>Fix Merge Conflicts</span>
+									</DropdownMenuItem>
+								)}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
+				)}
 
 				{/* View mode toggle - visible when there's enough space */}
 				{showViewModeToggle && onViewModeChange && (
@@ -920,9 +980,32 @@ export function DiffSidebarHeader({
 								<span>Collapse all</span>
 							</DropdownMenuItem>
 						)}
+
+						{/* Mark all as viewed/unviewed */}
+						{(onMarkAllViewed || onMarkAllUnviewed) && (onExpandAll || onCollapseAll) && (
+							<DropdownMenuSeparator />
+						)}
+						{onMarkAllViewed && (
+							<DropdownMenuItem
+								onClick={onMarkAllViewed}
+								className="text-xs"
+							>
+								<Check className="mr-2 size-3.5" />
+								<span>Mark all as viewed</span>
+							</DropdownMenuItem>
+						)}
+						{onMarkAllUnviewed && viewedCount > 0 && (
+							<DropdownMenuItem
+								onClick={onMarkAllUnviewed}
+								className="text-xs"
+							>
+								<Square className="mr-2 size-3.5" />
+								<span>Mark all as unviewed</span>
+							</DropdownMenuItem>
+						)}
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
 		</div>
 	);
-}
+})

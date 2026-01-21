@@ -5,6 +5,7 @@ import {
   agentsLoginModalOpenAtom,
   customClaudeConfigAtom,
   extendedThinkingEnabledAtom,
+  historyEnabledAtom,
   modelMaxOutputTokensAtom,
   sessionInfoAtom,
   type CustomClaudeConfig,
@@ -79,7 +80,7 @@ const ERROR_TOAST_CONFIG: Record<
   PROCESS_CRASH: {
     title: "Claude crashed",
     description:
-      "The Claude process exited unexpectedly. Try sending your message again.",
+      "The Claude process exited unexpectedly. Try sending your message again or rollback.",
   },
   EXECUTABLE_NOT_FOUND: {
     title: "Claude CLI not found",
@@ -145,6 +146,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
       .find((m) => m.role === "assistant")
     const sessionId = (lastAssistant as any)?.metadata?.sessionId
 
+    // Read extended thinking setting dynamically (so toggle applies to existing chats)
+    const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
+    const historyEnabled = appStore.get(historyEnabledAtom)
+
     // Read model selection dynamically (so model changes apply to existing chats)
     const selectedModelId = appStore.get(lastSelectedModelIdAtom)
     const modelString = MODEL_ID_MAP[selectedModelId]
@@ -156,7 +161,6 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     // Read extended thinking setting dynamically (so toggle applies to existing chats)
     // Clamp to model-specific limits discovered at runtime.
-    const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
     const resolvedModel = (customConfig?.model ?? modelString ?? "").toLowerCase()
     const modelMaxOutputTokens = appStore.get(modelMaxOutputTokensAtom)
     const derivedModelLimit =
@@ -209,6 +213,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             ...(maxThinkingTokens && { maxThinkingTokens }),
             ...(modelString && { model: modelString }),
             ...(customConfig && { customConfig }),
+            historyEnabled,
             ...(images.length > 0 && { images }),
           },
           {

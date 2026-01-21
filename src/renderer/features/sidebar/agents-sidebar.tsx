@@ -21,6 +21,7 @@ import {
   selectedAgentChatsCountAtom,
   isDesktopAtom,
   isFullscreenAtom,
+  showOfflineModeFeaturesAtom,
 } from "../../lib/atoms"
 import { ArchivePopover } from "../agents/ui/archive-popover"
 import { ChevronDown, MoreHorizontal } from "lucide-react"
@@ -90,6 +91,7 @@ import {
   undoStackAtom,
   type UndoItem,
 } from "../agents/atoms"
+import { NetworkStatus } from "../../components/ui/network-status"
 import { useAgentSubChatStore, OPEN_SUB_CHATS_CHANGE_EVENT } from "../agents/stores/sub-chat-store"
 import { AgentsHelpPopover } from "../agents/components/agents-help-popover"
 import { getShortcutKey, isDesktopApp } from "../../lib/utils/platform"
@@ -891,6 +893,7 @@ const SidebarHeader = memo(function SidebarHeader({
   closeButtonRef,
 }: SidebarHeaderProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const showOfflineFeatures = useAtomValue(showOfflineModeFeaturesAtom)
 
   return (
     <div
@@ -979,6 +982,11 @@ const SidebarHeader = memo(function SidebarHeader({
                         1Code
                       </div>
                     </div>
+                    {showOfflineFeatures && (
+                      <div className="flex-shrink-0">
+                        <NetworkStatus />
+                      </div>
+                    )}
                     <ChevronDown
                       className={cn(
                         "h-3 text-muted-foreground flex-shrink-0 overflow-hidden",

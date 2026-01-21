@@ -1,8 +1,10 @@
-import { useEffect, useMemo } from "react"
 import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai"
 import { ThemeProvider, useTheme } from "next-themes"
+import { useEffect, useMemo } from "react"
 import { Toaster } from "sonner"
+import { TooltipProvider } from "./components/ui/tooltip"
 import { TRPCProvider } from "./contexts/TRPCProvider"
+import { selectedProjectAtom } from "./features/agents/atoms"
 import { AgentsLayout } from "./features/layout/agents-layout"
 import {
   AnthropicOnboardingPage,
@@ -10,16 +12,13 @@ import {
   BillingMethodPage,
   SelectRepoPage,
 } from "./features/onboarding"
-import { TooltipProvider } from "./components/ui/tooltip"
-import { appStore } from "./lib/jotai-store"
-import { initAnalytics, identify, shutdown } from "./lib/analytics"
-import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
+import { identify, initAnalytics, shutdown } from "./lib/analytics"
 import {
-  anthropicOnboardingCompletedAtom,
-  apiKeyOnboardingCompletedAtom,
-  billingMethodAtom,
+  anthropicOnboardingCompletedAtom, apiKeyOnboardingCompletedAtom,
+  billingMethodAtom
 } from "./lib/atoms"
-import { selectedProjectAtom } from "./features/agents/atoms"
+import { appStore } from "./lib/jotai-store"
+import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
 import { trpc } from "./lib/trpc"
 
 /**

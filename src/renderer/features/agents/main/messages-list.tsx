@@ -9,6 +9,7 @@ import {
   isStreamingAtom,
   chatStatusAtom,
 } from "../stores/message-store"
+import { extractTextMentions, TextMentionBlocks } from "../mentions/render-file-mentions"
 
 // ============================================================================
 // MESSAGE STORE - External store for fine-grained subscriptions
@@ -906,6 +907,7 @@ interface SimpleIsolatedGroupProps {
     messageId: string
     textContent: string
     imageParts: any[]
+    skipTextMentionBlocks?: boolean
   }>
   ToolCallComponent: React.ComponentType<{
     icon: any
@@ -957,12 +959,18 @@ export const SimpleIsolatedGroup = memo(function SimpleIsolatedGroup({
   if (!userMsg) return null
 
   // User message data
-  const textContent = userMsg.parts
+  const rawTextContent = userMsg.parts
     ?.filter((p: any) => p.type === "text")
     .map((p: any) => p.text)
     .join("\n") || ""
 
   const imageParts = userMsg.parts?.filter((p: any) => p.type === "data-image") || []
+
+  // Extract text mentions (quote/diff) to render separately above sticky block
+  const { textMentions, cleanedText: textContent } = useMemo(
+    () => extractTextMentions(rawTextContent),
+    [rawTextContent]
+  )
 
   // Show cloning when sandbox is being set up
   const shouldShowCloning =
@@ -985,7 +993,15 @@ export const SimpleIsolatedGroup = memo(function SimpleIsolatedGroup({
             messageId={userMsg.id}
             textContent=""
             imageParts={imageParts}
+            skipTextMentionBlocks
           />
+        </div>
+      )}
+
+      {/* Text mentions (quote/diff) - NOT sticky */}
+      {textMentions.length > 0 && (
+        <div className="mb-2 pointer-events-auto">
+          <TextMentionBlocks mentions={textMentions} />
         </div>
       )}
 
@@ -998,6 +1014,7 @@ export const SimpleIsolatedGroup = memo(function SimpleIsolatedGroup({
           messageId={userMsg.id}
           textContent={textContent}
           imageParts={[]}
+          skipTextMentionBlocks
         />
 
         {/* Cloning indicator */}
@@ -1130,4 +1147,3 @@ export const SimpleIsolatedMessagesList = memo(function SimpleIsolatedMessagesLi
     </>
   )
 }, areSimpleListPropsEqual)
-

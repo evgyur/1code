@@ -17,7 +17,8 @@ import {
 } from "../../components/ui/alert-dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { toast } from "sonner";
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
+import { useAtom } from "jotai";
 import { trpc } from "../../lib/trpc";
 import { useChangesStore } from "../../lib/stores/changes-store";
 import { usePRStatus } from "../../hooks/usePRStatus";
@@ -28,8 +29,116 @@ import { ChangesFileFilter, type SubChatFilterItem } from "./components/changes-
 import { CommitInput } from "./components/commit-input";
 import { HistoryView, type CommitInfo } from "./components/history-view";
 import { getStatusIndicator } from "./utils/status";
-import { GitPullRequest } from "lucide-react";
+import { GitPullRequest, Eye } from "lucide-react";
 import type { ChangedFile as HistoryChangedFile } from "../../../shared/changes-types";
+import { viewedFilesAtomFamily, type ViewedFileState } from "../agents/atoms";
+import { Kbd } from "../../components/ui/kbd";
+
+// Memoized file item component with context menu to prevent re-renders
+const ChangesFileItemWithContext = memo(function ChangesFileItemWithContext({
+	file,
+	category,
+	isSelected,
+	isChecked,
+	isViewed,
+	onSelect,
+	onDoubleClick,
+	onCheckboxChange,
+	onCopyPath,
+	onCopyRelativePath,
+	onRevealInFinder,
+	onToggleViewed,
+	onDiscard,
+}: {
+	file: ChangedFile;
+	category: ChangeCategory;
+	isSelected: boolean;
+	isChecked: boolean;
+	isViewed: boolean;
+	onSelect: () => void;
+	onDoubleClick: () => void;
+	onCheckboxChange: () => void;
+	onCopyPath: () => void;
+	onCopyRelativePath: () => void;
+	onRevealInFinder: () => void;
+	onToggleViewed: () => void;
+	onDiscard: () => void;
+}) {
+	const fileName = file.path.split("/").pop() || file.path;
+	const dirPath = file.path.includes("/")
+		? file.path.substring(0, file.path.lastIndexOf("/"))
+		: "";
+	const isUntracked = file.status === "untracked" || file.status === "added";
+
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger asChild>
+				<div
+					data-file-item
+					className={cn(
+						"flex items-center gap-2 px-2 py-1 cursor-pointer",
+						"hover:bg-muted/80 transition-colors",
+						isSelected && "bg-muted"
+					)}
+					onClick={onSelect}
+					onDoubleClick={onDoubleClick}
+				>
+					<Checkbox
+						checked={isChecked}
+						onCheckedChange={onCheckboxChange}
+						onClick={(e) => e.stopPropagation()}
+						className="size-4 shrink-0 border-muted-foreground/50"
+					/>
+					<div className="flex-1 min-w-0 flex items-center overflow-hidden">
+						{dirPath && (
+							<span className="text-xs text-muted-foreground truncate flex-shrink min-w-0">
+								{dirPath}/
+							</span>
+						)}
+						<span className="text-xs font-medium flex-shrink-0 whitespace-nowrap">
+							{fileName}
+						</span>
+					</div>
+					<div className="shrink-0 flex items-center gap-1.5">
+						{isViewed && (
+							<div className="size-4 rounded bg-emerald-500/20 flex items-center justify-center">
+								<Eye className="size-2.5 text-emerald-500" />
+							</div>
+						)}
+						{getStatusIndicator(file.status)}
+					</div>
+				</div>
+			</ContextMenuTrigger>
+			<ContextMenuContent className="w-52">
+				<ContextMenuItem onClick={onCopyPath}>
+					Copy Path
+				</ContextMenuItem>
+				<ContextMenuItem onClick={onCopyRelativePath}>
+					Copy Relative Path
+				</ContextMenuItem>
+				<ContextMenuSeparator />
+				<ContextMenuItem onClick={onRevealInFinder}>
+					Reveal in Finder
+				</ContextMenuItem>
+				<ContextMenuSeparator />
+				<ContextMenuItem
+					onClick={onToggleViewed}
+					className="justify-between"
+				>
+					{isViewed ? "Mark as unviewed" : "Mark as viewed"}
+					<Kbd>V</Kbd>
+				</ContextMenuItem>
+				<ContextMenuSeparator />
+				<ContextMenuItem
+					onClick={onDiscard}
+					className="data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-400"
+				>
+					{isUntracked ? "Delete File..." : "Discard Changes..."}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
+	);
+});
 
 interface ChangesViewProps {
 	worktreePath: string;
@@ -83,6 +192,9 @@ export function ChangesView({
 	pushCount,
 }: ChangesViewProps) {
 	useFileChangeListener(worktreePath);
+
+	// Viewed files state from agents diff view (for showing eye icon and toggling)
+	const [viewedFiles, setViewedFiles] = useAtom(viewedFilesAtomFamily(chatId || ""));
 
 	const { baseBranch } = useChangesStore();
 	const { data: branchData } = trpc.changes.getBranches.useQuery(
@@ -168,7 +280,6 @@ export function ChangesView({
 
 	// Update subchat filter when initialSubChatFilter changes (e.g., from Review button)
 	useEffect(() => {
-		console.log('[ChangesView] initialSubChatFilter changed:', initialSubChatFilter)
 		setSubChatFilter(initialSubChatFilter);
 	}, [initialSubChatFilter]);
 
@@ -177,12 +288,15 @@ export function ChangesView({
 	const [selectedForCommit, setSelectedForCommit] = useState<Set<string>>(new Set());
 	const [hasInitializedSelection, setHasInitializedSelection] = useState(false);
 
+	// Reset filters when worktreePath changes, but preserve initialSubChatFilter
 	useEffect(() => {
 		setFileFilter("");
-		setSubChatFilter(null);
+		// Don't reset subChatFilter to null - use initialSubChatFilter instead
+		// This preserves the filter when component remounts (e.g., when diff sidebar opens)
+		setSubChatFilter(initialSubChatFilter);
 		setHasInitializedSelection(false);
 		setSelectedForCommit(new Set());
-	}, [worktreePath]);
+	}, [worktreePath, initialSubChatFilter]);
 
 	// Combine all files into a flat list
 	const allFiles = useMemo(() => {
@@ -347,6 +461,60 @@ export function ChangesView({
 			.map(f => f.file.path);
 	}, [filteredFiles, selectedForCommit]);
 
+	// Check if a file is marked as viewed in the diff view
+	// Key format matches agent-diff-view.tsx: `${oldPath}->${newPath}`
+	// Must be defined before early returns to maintain hooks order
+	const isFileMarkedAsViewed = useCallback((filePath: string): boolean => {
+		// For new files: /dev/null->{path}
+		// For modified files: {path}->{path}
+		// For deleted files: {path}->/dev/null
+		// We check all possible key formats
+		const possibleKeys = [
+			`${filePath}->${filePath}`,  // Modified
+			`/dev/null->${filePath}`,     // New file
+			`${filePath}->/dev/null`,     // Deleted file
+		];
+
+		for (const key of possibleKeys) {
+			const viewedState = viewedFiles[key];
+			if (viewedState?.viewed) {
+				return true;
+			}
+		}
+		return false;
+	}, [viewedFiles]);
+
+	// Toggle viewed state for a file in the list
+	const toggleFileViewed = useCallback((filePath: string) => {
+		// Try to find existing key
+		const possibleKeys = [
+			`${filePath}->${filePath}`,  // Modified
+			`/dev/null->${filePath}`,     // New file
+			`${filePath}->/dev/null`,     // Deleted file
+		];
+
+		let existingKey: string | null = null;
+		for (const key of possibleKeys) {
+			if (viewedFiles[key]) {
+				existingKey = key;
+				break;
+			}
+		}
+
+		// Use existing key or default to modified format
+		const fileKey = existingKey || `${filePath}->${filePath}`;
+		const currentState = viewedFiles[fileKey];
+		const isCurrentlyViewed = currentState?.viewed || false;
+
+		setViewedFiles({
+			...viewedFiles,
+			[fileKey]: {
+				viewed: !isCurrentlyViewed,
+				contentHash: currentState?.contentHash || "",
+			},
+		});
+	}, [viewedFiles, setViewedFiles]);
+
 	if (!worktreePath) {
 		return (
 			<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm p-4">
@@ -402,55 +570,6 @@ export function ChangesView({
 	const handleOpenInEditor = (filePath: string) => {
 		const absolutePath = `${worktreePath}/${filePath}`;
 		openInEditorMutation.mutate({ path: absolutePath, cwd: worktreePath });
-	};
-
-	// Render file item content (shared between both modes)
-	const renderFileItemContent = (
-		file: ChangedFile,
-		category: ChangeCategory,
-		isSelected: boolean,
-		isChecked: boolean,
-	) => {
-		const fileName = file.path.split("/").pop() || file.path;
-		const dirPath = file.path.includes("/")
-			? file.path.substring(0, file.path.lastIndexOf("/"))
-			: "";
-
-		return (
-			<div
-				data-file-item
-				className={cn(
-					"flex items-center gap-2 px-2 py-1 cursor-pointer",
-					"hover:bg-muted/80 transition-colors",
-					isSelected && "bg-muted"
-				)}
-				onClick={() => {
-					handleFileSelect(file, category);
-					fileListRef.current?.focus();
-				}}
-				onDoubleClick={() => handleFileDoubleClick(file, category)}
-			>
-				<Checkbox
-					checked={isChecked}
-					onCheckedChange={() => handleCheckboxChange(file.path)}
-					onClick={(e) => e.stopPropagation()}
-					className="size-4 shrink-0 border-muted-foreground/50"
-				/>
-				<div className="flex-1 min-w-0 flex items-center overflow-hidden">
-					{dirPath && (
-						<span className="text-xs text-muted-foreground truncate flex-shrink min-w-0">
-							{dirPath}/
-						</span>
-					)}
-					<span className="text-xs font-medium flex-shrink-0 whitespace-nowrap">
-						{fileName}
-					</span>
-				</div>
-				<div className="shrink-0">
-					{getStatusIndicator(file.status)}
-				</div>
-			</div>
-		);
 	};
 
 	return (
@@ -525,38 +644,27 @@ export function ChangesView({
 								tabIndex={0}
 								onKeyDown={handleKeyDown}
 							>
-								{filteredFiles.map(({ file, category }) => {
-									const isSelected = selectedFile?.path === file.path;
-									const isChecked = selectedForCommit.has(file.path);
-									const isUntracked = file.status === "untracked" || file.status === "added";
-
-									return (
-										<ContextMenu key={file.path}>
-											<ContextMenuTrigger asChild>
-												{renderFileItemContent(file, category, isSelected, isChecked)}
-											</ContextMenuTrigger>
-											<ContextMenuContent className="w-52">
-												<ContextMenuItem onClick={() => handleCopyPath(file.path)}>
-													Copy Path
-												</ContextMenuItem>
-												<ContextMenuItem onClick={() => handleCopyRelativePath(file.path)}>
-													Copy Relative Path
-												</ContextMenuItem>
-												<ContextMenuSeparator />
-												<ContextMenuItem onClick={() => handleRevealInFinder(file.path)}>
-													Reveal in Finder
-												</ContextMenuItem>
-												<ContextMenuSeparator />
-												<ContextMenuItem
-													onClick={() => setDiscardFile(file)}
-													className="data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-400"
-												>
-													{isUntracked ? "Delete File..." : "Discard Changes..."}
-												</ContextMenuItem>
-											</ContextMenuContent>
-										</ContextMenu>
-									);
-								})}
+								{filteredFiles.map(({ file, category }) => (
+									<ChangesFileItemWithContext
+										key={file.path}
+										file={file}
+										category={category}
+										isSelected={selectedFile?.path === file.path}
+										isChecked={selectedForCommit.has(file.path)}
+										isViewed={isFileMarkedAsViewed(file.path)}
+										onSelect={() => {
+											handleFileSelect(file, category);
+											fileListRef.current?.focus();
+										}}
+										onDoubleClick={() => handleFileDoubleClick(file, category)}
+										onCheckboxChange={() => handleCheckboxChange(file.path)}
+										onCopyPath={() => handleCopyPath(file.path)}
+										onCopyRelativePath={() => handleCopyRelativePath(file.path)}
+										onRevealInFinder={() => handleRevealInFinder(file.path)}
+										onToggleViewed={() => toggleFileViewed(file.path)}
+										onDiscard={() => setDiscardFile(file)}
+									/>
+								))}
 							</div>
 						)}
 

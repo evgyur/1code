@@ -18,6 +18,7 @@ export function DiffCenterPeekDialog({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.stopPropagation() // Prevent ESC from bubbling to stop stream handler
         onClose()
       }
     },
@@ -47,6 +48,8 @@ export function DiffCenterPeekDialog({
 
           {/* Dialog */}
           <motion.div
+            role="dialog"
+            aria-modal="true"
             initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}

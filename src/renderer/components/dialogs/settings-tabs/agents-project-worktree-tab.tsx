@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { useSetAtom } from "jotai"
 import { trpc } from "../../../lib/trpc"
-import { Button } from "../../ui/button"
+import { Button, buttonVariants } from "../../ui/button"
 import { Input } from "../../ui/input"
 import { Label } from "../../ui/label"
 import { Plus, Trash2, ChevronDown } from "lucide-react"
@@ -12,11 +12,24 @@ import {
   SelectItem,
   SelectTrigger,
 } from "../../ui/select"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../../ui/alert-dialog"
 import { toast } from "sonner"
 import { COMMAND_PROMPTS } from "../../../features/agents/commands"
 import {
   agentsSettingsDialogOpenAtom,
   selectedAgentChatIdAtom,
+  selectedProjectAtom,
+  agentsSettingsDialogActiveTabAtom,
 } from "../../../lib/atoms"
 
 function useIsNarrowScreen(): boolean {
@@ -65,12 +78,41 @@ export function AgentsProjectWorktreeTab({
   // For "Fill with AI" - create chat and close settings
   const setSettingsDialogOpen = useSetAtom(agentsSettingsDialogOpenAtom)
   const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
+  const setSelectedProject = useSetAtom(selectedProjectAtom)
+  const setSettingsActiveTab = useSetAtom(agentsSettingsDialogActiveTabAtom)
   const createChatMutation = trpc.chats.create.useMutation({
     onSuccess: (data) => {
       setSettingsDialogOpen(false)
       setSelectedChatId(data.id)
     },
   })
+
+  // Get project info
+  const { data: project } = trpc.projects.get.useQuery(
+    { id: projectId },
+    { enabled: !!projectId },
+  )
+
+  // Delete project mutation
+  const deleteMutation = trpc.projects.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Project removed from list")
+      // Clear selected project if it's the one being deleted
+      setSelectedProject((current) => {
+        if (current?.id === projectId) {
+          return null
+        }
+        return current
+      })
+      // Switch to account tab
+      setSettingsActiveTab("account")
+    },
+    onError: (err) => {
+      toast.error(`Failed to delete project: ${err.message}`)
+    },
+  })
+
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   // Local state
   const [saveTarget, setSaveTarget] = useState<"cursor" | "1code">("1code")
@@ -177,11 +219,43 @@ export function AgentsProjectWorktreeTab({
     <div className="p-6 space-y-6">
       {/* Header */}
       {!isNarrowScreen && (
-        <div className="flex flex-col space-y-1.5 text-center sm:text-left">
-          <h3 className="text-sm font-semibold text-foreground">Worktree Setup</h3>
-          <p className="text-xs text-muted-foreground">
-            Configure setup commands that run when a new worktree is created
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-col space-y-1.5 text-center sm:text-left">
+            <h3 className="text-sm font-semibold text-foreground">Worktree Setup</h3>
+            <p className="text-xs text-muted-foreground">
+              Configure setup commands that run when a new worktree is created
+            </p>
+          </div>
+          <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-destructive hover:text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Remove Project
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove Project?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will remove "{project?.name}" from your project list. Your files will not be deleted.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate({ id: projectId })}
+                  disabled={deleteMutation.isPending}
+                  className={buttonVariants({ variant: "destructive" })}
+                >
+                  {deleteMutation.isPending ? "Removing..." : "Remove"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo, useEffect, useRef, useState, memo } from "react"
+import { useCallback, useMemo, useEffect, useRef, useState, memo, forwardRef, useImperativeHandle } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import {
   loadingSubChatsAtom,
@@ -65,7 +65,11 @@ interface SearchHistoryPopoverProps {
   onSelect: (subChat: SubChatMeta) => void
 }
 
-const SearchHistoryPopover = memo(function SearchHistoryPopover({
+export interface SearchHistoryPopoverRef {
+  open: () => void
+}
+
+const SearchHistoryPopover = memo(forwardRef<SearchHistoryPopoverRef, SearchHistoryPopoverProps>(function SearchHistoryPopover({
   sortedSubChats,
   loadingSubChats,
   subChatUnseenChanges,
@@ -73,8 +77,13 @@ const SearchHistoryPopover = memo(function SearchHistoryPopover({
   pendingPlanApprovals,
   allSubChatsLength,
   onSelect,
-}: SearchHistoryPopoverProps) {
+}, ref) {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
+
+  // Expose open function to parent
+  useImperativeHandle(ref, () => ({
+    open: () => setIsHistoryOpen(true)
+  }), [])
 
   const renderItem = useCallback((subChat: SubChatMeta) => {
     const timeAgo = formatTimeAgo(subChat.updated_at || subChat.created_at)
@@ -147,7 +156,7 @@ const SearchHistoryPopover = memo(function SearchHistoryPopover({
       }
     />
   )
-})
+}))
 
 interface SubChatSelectorProps {
   onCreateNew: () => void
@@ -213,6 +222,7 @@ export function SubChatSelector({
   const leftGradientRef = useRef<HTMLDivElement>(null)
   const rightGradientRef = useRef<HTMLDivElement>(null)
   const truncatedTabsRef = useRef<Set<string>>(new Set())
+  const searchHistoryPopoverRef = useRef<SearchHistoryPopoverRef>(null)
 
   // Map open IDs to metadata and sort: pinned first, then preserve user's tab order
   const openSubChats = useMemo(() => {
@@ -371,7 +381,6 @@ export function SubChatSelector({
   const handleSelectFromHistory = useCallback(
     (subChat: SubChatMeta) => {
       onSwitchFromHistory(subChat.id)
-      setIsHistoryOpen(false)
     },
     [onSwitchFromHistory],
   )
@@ -401,7 +410,7 @@ export function SubChatSelector({
 
         e.preventDefault()
         e.stopPropagation()
-        setIsHistoryOpen(true)
+        searchHistoryPopoverRef.current?.open()
       }
     }
 
@@ -827,6 +836,7 @@ export function SubChatSelector({
           }}
         >
           <SearchHistoryPopover
+            ref={searchHistoryPopoverRef}
             sortedSubChats={sortedSubChats}
             loadingSubChats={loadingSubChats}
             subChatUnseenChanges={subChatUnseenChanges}

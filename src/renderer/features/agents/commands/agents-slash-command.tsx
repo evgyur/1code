@@ -11,6 +11,7 @@ import {
   useState,
   memo,
 } from "react"
+import { createPortal } from "react-dom"
 import {
   IconSpinner,
   IconChatBubble,
@@ -372,18 +373,19 @@ export const AgentsSlashCommand = memo(function AgentsSlashCommand({
   // Calculate global index for each item
   let globalIndex = 0
 
-  return (
+  return createPortal(
     <div
       ref={dropdownRef}
-      className="fixed z-[99999] overflow-hidden rounded-[10px] border border-border bg-popover py-1 text-xs text-popover-foreground shadow-lg dark"
+      className="fixed z-[99999] overflow-y-auto rounded-[10px] border border-border bg-popover py-1 text-xs text-popover-foreground shadow-lg dark [&::-webkit-scrollbar]:hidden"
       style={{
         top: finalTop,
         left: finalLeft,
         width: `${dropdownWidth}px`,
         maxHeight: `${computedMaxHeight}px`,
-        overflowY: "auto",
         transform: transformY,
-      }}
+        scrollbarWidth: 'none',
+        msOverflowStyle: 'none',
+      } as React.CSSProperties}
     >
       {/* Builtin commands section */}
       {builtinOptions.length > 0 && (
@@ -493,6 +495,7 @@ export const AgentsSlashCommand = memo(function AgentsSlashCommand({
             : "No commands available"}
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   )
 })

@@ -64,6 +64,10 @@ export const streamingMessageIdAtom = atom<string | null>(null)
 // Chat status atom
 export const chatStatusAtom = atom<string>("ready")
 
+// Rollback handler/state (optional) to avoid prop drilling
+export const rollbackHandlerAtom = atom<((msg: any) => void) | null>(null)
+export const isRollingBackAtom = atom<boolean>(false)
+
 // Current subChatId - used to isolate caches per chat
 export const currentSubChatIdAtom = atom<string>("default")
 
@@ -559,14 +563,20 @@ export const syncMessagesWithStatusAtom = atom(
   (get, set, payload: { messages: Message[]; status: string; subChatId?: string }) => {
     const { messages, status, subChatId } = payload
 
-    // Update current subChatId if provided
-    if (subChatId) {
+    // Update current subChatId if provided AND changed
+    // Avoid unnecessary set() calls - even though Jotai won't re-render for same primitive,
+    // this saves the overhead of the comparison check in subscribers
+    const prevSubChatId = get(currentSubChatIdAtom)
+    if (subChatId && subChatId !== prevSubChatId) {
       set(currentSubChatIdAtom, subChatId)
     }
-    const currentSubChatId = subChatId ?? get(currentSubChatIdAtom)
+    const currentSubChatId = subChatId ?? prevSubChatId
 
-    // Update status
-    set(chatStatusAtom, status)
+    // Update status only if changed
+    const prevStatus = get(chatStatusAtom)
+    if (status !== prevStatus) {
+      set(chatStatusAtom, status)
+    }
 
     const currentIds = get(messageIdsAtom)
     const currentRoles = get(messageRolesAtom)

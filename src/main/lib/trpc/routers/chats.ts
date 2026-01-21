@@ -1,28 +1,28 @@
-import { z } from "zod"
-import { router, publicProcedure } from "../index"
-import { getDatabase, chats, subChats, projects } from "../../db"
-import { eq, desc, isNull, isNotNull, inArray, and } from "drizzle-orm"
-import {
-  createWorktreeForChat,
-  removeWorktree,
-  getWorktreeDiff,
-  fetchGitHubPRStatus,
-} from "../../git"
-import { execWithShellEnv } from "../../git/shell-env"
-import simpleGit from "simple-git"
-import { getAuthManager, getBaseUrl } from "../../../index"
-import {
-  trackWorkspaceCreated,
-  trackWorkspaceArchived,
-  trackWorkspaceDeleted,
-  trackPRCreated,
-} from "../../analytics"
-import { terminalManager } from "../../terminal/manager"
-import { splitUnifiedDiffByFile } from "../../git/diff-parser"
-import { secureFs } from "../../git/security"
-import { gitCache, computeContentHash } from "../../git/cache"
+import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm"
 import * as fs from "fs/promises"
 import * as path from "path"
+import simpleGit from "simple-git"
+import { z } from "zod"
+import { getAuthManager } from "../../../index"
+import {
+  trackPRCreated,
+  trackWorkspaceArchived,
+  trackWorkspaceCreated,
+  trackWorkspaceDeleted,
+} from "../../analytics"
+import { chats, getDatabase, projects, subChats } from "../../db"
+import {
+  createWorktreeForChat,
+  fetchGitHubPRStatus,
+  getWorktreeDiff,
+  removeWorktree,
+} from "../../git"
+import { computeContentHash, gitCache } from "../../git/cache"
+import { splitUnifiedDiffByFile } from "../../git/diff-parser"
+import { execWithShellEnv } from "../../git/shell-env"
+import { applyRollbackStash } from "../../git/stash"
+import { terminalManager } from "../../terminal/manager"
+import { publicProcedure, router } from "../index"
 
 // Fallback to truncated user message if AI generation fails
 function getFallbackName(userMessage: string): string {
@@ -514,6 +514,78 @@ export const chatsRouter = router({
     }),
 
   /**
+   * Rollback to a specific message by sdkMessageUuid
+   * Handles both git state rollback and message truncation
+   * Git rollback is done first - if it fails, the whole operation aborts
+   */
+  rollbackToMessage: publicProcedure
+    .input(
+      z.object({
+        subChatId: z.string(),
+        sdkMessageUuid: z.string(),
+      }),
+    )
+    .mutation(async ({ input }): Promise<
+      | { success: false; error: string }
+      | { success: true; messages: any[] }
+    > => {
+      const db = getDatabase()
+
+      // 1. Get the sub-chat and its messages
+      const subChat = db
+        .select()
+        .from(subChats)
+        .where(eq(subChats.id, input.subChatId))
+        .get()
+      if (!subChat) {
+        return { success: false, error: "Sub-chat not found" }
+      }
+
+      // 2. Parse messages and find the target message by sdkMessageUuid
+      const messages = JSON.parse(subChat.messages || "[]")
+      const targetIndex = messages.findIndex(
+        (m: any) => m.metadata?.sdkMessageUuid === input.sdkMessageUuid,
+      )
+
+      if (targetIndex === -1) {
+        return { success: false, error: "Message not found" }
+      }
+
+      // 3. Get the parent chat for worktreePath
+      const chat = db
+        .select()
+        .from(chats)
+        .where(eq(chats.id, subChat.chatId))
+        .get()
+
+      // 4. Rollback git state first - if this fails, abort the whole operation
+      if (chat?.worktreePath) {
+        const res = await applyRollbackStash(chat.worktreePath, input.sdkMessageUuid)
+        if (!res) {
+          return { success: false, error: `Git rollback failed` }
+        }
+      }
+
+      // 5. Truncate messages to include up to and including the target message
+      const truncatedMessages = messages.slice(0, targetIndex + 1)
+
+      // 6. Update the sub-chat with truncated messages
+      db.update(subChats)
+        .set({
+          messages: JSON.stringify(truncatedMessages),
+          updatedAt: new Date(),
+        })
+        .where(eq(subChats.id, input.subChatId))
+        .returning()
+        .get()
+
+      return {
+        success: true,
+        messages: truncatedMessages,
+      }
+    }),
+
+  /**
    * Update sub-chat session ID (for Claude resume)
    */
   updateSubChatSession: publicProcedure
@@ -653,11 +725,8 @@ export const chatsRouter = router({
       }
       const cached = gitCache.getParsedDiff<ParsedDiffResponse>(chat.worktreePath, diffHash)
       if (cached) {
-        console.log("[getParsedDiff] Cache hit for:", chat.worktreePath)
         return cached
       }
-
-      console.log("[getParsedDiff] Cache miss, parsing:", chat.worktreePath)
 
       // 3. Parse diff into files
       const files = splitUnifiedDiffByFile(result.diff || "")
@@ -719,7 +788,6 @@ export const chatsRouter = router({
 
       // 6. Store in cache
       gitCache.setParsedDiff(chat.worktreePath, diffHash, response)
-
       return response
     }),
 
@@ -1277,11 +1345,12 @@ export const chatsRouter = router({
           const msg = messages[i]
           if (!msg) continue
 
-          // If user message says "Implement plan" (exact match), plan is already approved
+          // If user message says "Build plan" or "Implement plan" (exact match), plan is already approved
           if (msg.role === "user") {
             const textPart = msg.parts?.find((p) => p.type === "text")
             const text = textPart?.text || ""
-            if (text.trim().toLowerCase() === "implement plan") {
+            const normalizedText = text.trim().toLowerCase()
+            if (normalizedText === "implement plan" || normalizedText === "build plan") {
               break // Plan was approved, stop searching
             }
           }

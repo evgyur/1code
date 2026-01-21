@@ -1,8 +1,8 @@
 "use client"
 
 import { useSetAtom } from "jotai"
-import { useEffect, useRef, useState } from "react"
 import { ChevronLeft } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 
 import { ClaudeCodeIcon, IconSpinner } from "../../components/ui/icons"
 import { Input } from "../../components/ui/input"
@@ -38,6 +38,9 @@ export function AnthropicOnboardingPage() {
   const [userClickedConnect, setUserClickedConnect] = useState(false)
   const [urlOpened, setUrlOpened] = useState(false)
   const [savedOauthUrl, setSavedOauthUrl] = useState<string | null>(null)
+  const [ignoredExistingToken, setIgnoredExistingToken] = useState(false)
+  const [isUsingExistingToken, setIsUsingExistingToken] = useState(false)
+  const [existingTokenError, setExistingTokenError] = useState<string | null>(null)
   const urlOpenedRef = useRef(false)
   const setAnthropicOnboardingCompleted = useSetAtom(
     anthropicOnboardingCompletedAtom
@@ -48,10 +51,23 @@ export function AnthropicOnboardingPage() {
     setBillingMethod(null)
   }
 
+  const formatTokenPreview = (token: string) => {
+    const trimmed = token.trim()
+    if (trimmed.length <= 16) return trimmed
+    return `${trimmed.slice(0, 19)}...${trimmed.slice(-6)}`
+  }
+
   // tRPC mutations
   const startAuthMutation = trpc.claudeCode.startAuth.useMutation()
   const submitCodeMutation = trpc.claudeCode.submitCode.useMutation()
   const openOAuthUrlMutation = trpc.claudeCode.openOAuthUrl.useMutation()
+  const importSystemTokenMutation = trpc.claudeCode.importSystemToken.useMutation()
+  const existingTokenQuery = trpc.claudeCode.getSystemToken.useQuery()
+  const existingToken = existingTokenQuery.data?.token ?? null
+  const hasExistingToken = !!existingToken
+  const checkedExistingToken = existingTokenQuery.isFetched
+  const shouldOfferExistingToken =
+    checkedExistingToken && hasExistingToken && !ignoredExistingToken
 
   // Poll for OAuth URL
   const pollStatusQuery = trpc.claudeCode.pollStatus.useQuery(
@@ -67,6 +83,8 @@ export function AnthropicOnboardingPage() {
 
   // Auto-start auth on mount
   useEffect(() => {
+    if (!checkedExistingToken || shouldOfferExistingToken) return
+
     if (flowState.step === "idle") {
       setFlowState({ step: "starting" })
       startAuthMutation.mutate(undefined, {
@@ -86,7 +104,7 @@ export function AnthropicOnboardingPage() {
         },
       })
     }
-  }, [flowState.step, startAuthMutation])
+  }, [flowState.step, startAuthMutation, checkedExistingToken, shouldOfferExistingToken])
 
   // Update flow state when we get the OAuth URL
   useEffect(() => {
@@ -161,6 +179,29 @@ export function AnthropicOnboardingPage() {
     }
     // For idle, starting, waiting_url states - the useEffect will handle opening the URL
     // when it becomes ready (userClickedConnect is now true)
+  }
+
+  const handleUseExistingToken = async () => {
+    if (!hasExistingToken || isUsingExistingToken) return
+
+    setIsUsingExistingToken(true)
+    setExistingTokenError(null)
+
+    try {
+      await importSystemTokenMutation.mutateAsync()
+      setAnthropicOnboardingCompleted(true)
+    } catch (err) {
+      setExistingTokenError(
+        err instanceof Error ? err.message : "Failed to use existing token"
+      )
+      setIsUsingExistingToken(false)
+    }
+  }
+
+  const handleRejectExistingToken = () => {
+    setIgnoredExistingToken(true)
+    setExistingTokenError(null)
+    handleConnectClick()
   }
 
   // Submit code - reusable for both auto-submit and manual Enter
@@ -252,8 +293,53 @@ export function AnthropicOnboardingPage() {
 
         {/* Content */}
         <div className="space-y-6 flex flex-col items-center">
+          {/* Existing token prompt */}
+          {shouldOfferExistingToken && flowState.step === "idle" && (
+            <div className="space-y-4 w-full">
+              <div className="p-4 bg-muted/50 border border-border rounded-lg">
+                <p className="text-sm font-medium">
+                  Existing Claude Code credentials found
+                </p>
+                {existingToken && (
+                  <pre className="mt-2 px-2.5 py-2 text-xs text-foreground whitespace-pre-wrap break-words font-mono bg-background/60 rounded border border-border/60">
+                    {formatTokenPreview(existingToken)}
+                  </pre>
+                )}
+              </div>
+              {existingTokenError && (
+                <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                  <p className="text-sm text-destructive">
+                    {existingTokenError}
+                  </p>
+                </div>
+              )}
+              <div className="flex w-full gap-2">
+                <button
+                  onClick={handleRejectExistingToken}
+                  disabled={isUsingExistingToken}
+                  className="h-8 px-3 flex-1 bg-muted text-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-muted/80 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                >
+                  Auth with Anthropic
+                </button>
+                <button
+                  onClick={handleUseExistingToken}
+                  disabled={isUsingExistingToken}
+                  className="h-8 px-3 flex-1 bg-primary text-primary-foreground rounded-lg text-sm font-medium transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.97] shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] dark:shadow-[0_0_0_0.5px_rgb(23,23,23),inset_0_0_0_1px_rgba(255,255,255,0.14)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                >
+                  {isUsingExistingToken ? (
+                    <IconSpinner className="h-4 w-4" />
+                  ) : (
+                    "Use existing token"
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Connect Button - shows loader only if user clicked AND loading */}
-          {!urlOpened &&
+          {checkedExistingToken &&
+            !shouldOfferExistingToken &&
+            !urlOpened &&
             flowState.step !== "has_url" &&
             flowState.step !== "error" && (
               <button

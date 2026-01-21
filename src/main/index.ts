@@ -633,6 +633,17 @@ if (gotTheLock) {
       }, 5000)
     }
 
+    // Warm up MCP cache 3 seconds after startup (background, non-blocking)
+    // This populates the cache so all future sessions can use filtered MCP servers
+    setTimeout(async () => {
+      try {
+        const { warmupMcpCache } = await import("./lib/trpc/routers/claude")
+        await warmupMcpCache()
+      } catch (error) {
+        console.error("[App] MCP warmup failed:", error)
+      }
+    }, 3000)
+
     // Handle deep link from app launch (Windows/Linux)
     const deepLinkUrl = process.argv.find((arg) =>
       arg.startsWith(`${PROTOCOL}://`),

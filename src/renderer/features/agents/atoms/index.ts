@@ -424,6 +424,13 @@ export const subChatToChatMapAtom = atom<Map<string, string>>(new Map())
 // When set, AgentDiffView will only show files matching these paths
 export const filteredDiffFilesAtom = atom<string[] | null>(null)
 
+// Selected file path in diff sidebar (for highlighting in file list and showing in diff view)
+// Using atom instead of useState to prevent re-renders of unrelated components
+export const selectedDiffFilePathAtom = atom<string | null>(null)
+
+// PR creation loading state - atom to allow ChatViewInner to reset it after sending message
+export const isCreatingPrAtom = atom<boolean>(false)
+
 // Filter by subchat ID for diff sidebar and changes panel (null = show all)
 // When set by Review button, both diff view and file list filter to this subchat's files
 export const filteredSubChatIdAtom = atom<string | null>(null)
@@ -535,3 +542,32 @@ export type UndoItem =
   | { type: "subchat"; subChatId: string; chatId: string; timeoutId: ReturnType<typeof setTimeout> }
 
 export const undoStackAtom = atom<UndoItem[]>([])
+
+// Viewed files state for diff review (GitHub-style "Viewed" checkbox)
+// Tracks which files have been reviewed with content hash to detect changes
+export type ViewedFileState = {
+  viewed: boolean
+  contentHash: string // Hash of diffText when marked as viewed
+}
+
+// Storage atom for viewed files per chat
+// Structure: { [chatId]: { [fileKey]: ViewedFileState } }
+const viewedFilesStorageAtom = atomWithStorage<
+  Record<string, Record<string, ViewedFileState>>
+>(
+  "agents:viewedFiles",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+// atomFamily to get/set viewed files per chatId
+export const viewedFilesAtomFamily = atomFamily((chatId: string) =>
+  atom(
+    (get) => get(viewedFilesStorageAtom)[chatId] ?? {},
+    (get, set, newState: Record<string, ViewedFileState>) => {
+      const current = get(viewedFilesStorageAtom)
+      set(viewedFilesStorageAtom, { ...current, [chatId]: newState })
+    },
+  ),
+)

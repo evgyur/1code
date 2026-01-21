@@ -36,12 +36,32 @@ export interface QueuedTextContext {
   sourceMessageId: string
 }
 
+// Text context selected from diff sidebar
+export interface DiffTextContext {
+  id: string
+  text: string
+  filePath: string
+  lineNumber?: number
+  lineType?: "old" | "new"
+  preview: string // Truncated for display
+  createdAt: Date
+}
+
+export interface QueuedDiffTextContext {
+  id: string
+  text: string
+  filePath: string
+  lineNumber?: number
+  lineType?: "old" | "new"
+}
+
 export type AgentQueueItem = {
   id: string
   message: string // Serialized value with @[id] tokens for mentions
   images?: QueuedImage[]
   files?: QueuedFile[]
   textContexts?: QueuedTextContext[]
+  diffTextContexts?: QueuedDiffTextContext[]
   timestamp: Date
   status: "pending" | "processing"
 }
@@ -55,7 +75,8 @@ export function createQueueItem(
   message: string,
   images?: QueuedImage[],
   files?: QueuedFile[],
-  textContexts?: QueuedTextContext[]
+  textContexts?: QueuedTextContext[],
+  diffTextContexts?: QueuedDiffTextContext[]
 ): AgentQueueItem {
   return {
     id,
@@ -63,6 +84,7 @@ export function createQueueItem(
     images: images && images.length > 0 ? images : undefined,
     files: files && files.length > 0 ? files : undefined,
     textContexts: textContexts && textContexts.length > 0 ? textContexts : undefined,
+    diffTextContexts: diffTextContexts && diffTextContexts.length > 0 ? diffTextContexts : undefined,
     timestamp: new Date(),
     status: "pending",
   }
@@ -119,6 +141,17 @@ export function toQueuedTextContext(ctx: SelectedTextContext): QueuedTextContext
     id: ctx.id,
     text: ctx.text,
     sourceMessageId: ctx.sourceMessageId,
+  }
+}
+
+// Helper to convert DiffTextContext to QueuedDiffTextContext
+export function toQueuedDiffTextContext(ctx: DiffTextContext): QueuedDiffTextContext {
+  return {
+    id: ctx.id,
+    text: ctx.text,
+    filePath: ctx.filePath,
+    lineNumber: ctx.lineNumber,
+    lineType: ctx.lineType,
   }
 }
 

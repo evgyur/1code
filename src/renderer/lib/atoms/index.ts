@@ -12,6 +12,7 @@ export {
   lastSelectedModelIdAtom,
   lastSelectedAgentIdAtom,
   lastSelectedRepoAtom,
+  selectedProjectAtom,
   agentsUnseenChangesAtom,
   agentsSubChatUnseenChangesAtom,
   loadingSubChatsAtom,
@@ -184,6 +185,27 @@ export type CustomClaudeConfig = {
   baseUrl: string
 }
 
+// Model profile system - support multiple configs
+export type ModelProfile = {
+  id: string
+  name: string
+  config: CustomClaudeConfig
+  isOffline?: boolean // Mark as offline/Ollama profile
+}
+
+// Predefined offline profile for Ollama
+export const OFFLINE_PROFILE: ModelProfile = {
+  id: 'offline-ollama',
+  name: 'Offline (Ollama)',
+  isOffline: true,
+  config: {
+    model: 'qwen2.5-coder:7b',
+    token: 'ollama',
+    baseUrl: 'http://localhost:11434',
+  },
+}
+
+// Legacy single config (deprecated, kept for backwards compatibility)
 export const customClaudeConfigAtom = atomWithStorage<CustomClaudeConfig>(
   "agents:claude-custom-config",
   {
@@ -203,6 +225,48 @@ export const modelMaxOutputTokensAtom = atomWithStorage<Record<string, number>>(
   { getOnInit: true },
 )
 
+// New: Model profiles storage
+export const modelProfilesAtom = atomWithStorage<ModelProfile[]>(
+  "agents:model-profiles",
+  [OFFLINE_PROFILE], // Start with offline profile
+  undefined,
+  { getOnInit: true },
+)
+
+// Active profile ID (null = use Claude Code default)
+export const activeProfileIdAtom = atomWithStorage<string | null>(
+  "agents:active-profile-id",
+  null,
+  undefined,
+  { getOnInit: true },
+)
+
+// Auto-fallback to offline mode when internet is unavailable
+export const autoOfflineModeAtom = atomWithStorage<boolean>(
+  "agents:auto-offline-mode",
+  true, // Enabled by default
+  undefined,
+  { getOnInit: true },
+)
+
+// Simulate offline mode for testing (debug feature)
+export const simulateOfflineAtom = atomWithStorage<boolean>(
+  "agents:simulate-offline",
+  false, // Disabled by default
+  undefined,
+  { getOnInit: true },
+)
+
+// Show offline mode UI (debug feature - enables offline functionality visibility)
+export const showOfflineModeFeaturesAtom = atomWithStorage<boolean>(
+  "agents:show-offline-mode-features",
+  false, // Hidden by default
+  undefined,
+  { getOnInit: true },
+)
+
+// Network status (updated from main process)
+export const networkOnlineAtom = atom<boolean>(true)
 export function normalizeCustomClaudeConfig(
   config: CustomClaudeConfig,
 ): CustomClaudeConfig | undefined {
@@ -215,12 +279,55 @@ export function normalizeCustomClaudeConfig(
   return { model, token, baseUrl }
 }
 
+// Get active config (considering network status and auto-fallback)
+export const activeConfigAtom = atom((get) => {
+  const activeProfileId = get(activeProfileIdAtom)
+  const profiles = get(modelProfilesAtom)
+  const legacyConfig = get(customClaudeConfigAtom)
+  const networkOnline = get(networkOnlineAtom)
+  const autoOffline = get(autoOfflineModeAtom)
+
+  // If auto-offline enabled and no internet, use offline profile
+  if (!networkOnline && autoOffline) {
+    const offlineProfile = profiles.find(p => p.isOffline)
+    if (offlineProfile) {
+      return offlineProfile.config
+    }
+  }
+
+  // If specific profile is selected, use it
+  if (activeProfileId) {
+    const profile = profiles.find(p => p.id === activeProfileId)
+    if (profile) {
+      return profile.config
+    }
+  }
+
+  // Fallback to legacy config if set
+  const normalized = normalizeCustomClaudeConfig(legacyConfig)
+  if (normalized) {
+    return normalized
+  }
+
+  // No custom config
+  return undefined
+})
+
 // Preferences - Extended Thinking
 // When enabled, Claude will use extended thinking for deeper reasoning (128K tokens)
 // Note: Extended thinking disables response streaming
 export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
   "preferences:extended-thinking-enabled",
   true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Preferences - History (Rollback)
+// When enabled, allow rollback to previous assistant messages
+export const historyEnabledAtom = atomWithStorage<boolean>(
+  "preferences:history-enabled",
+  false,
   undefined,
   { getOnInit: true },
 )

@@ -2,7 +2,7 @@
 
 import { memo } from "react"
 import { useAtomValue } from "jotai"
-import { userMessageIdsAtom } from "../stores/message-store"
+import { userMessageIdsAtom, currentSubChatIdAtom } from "../stores/message-store"
 import { IsolatedMessageGroup } from "./isolated-message-group"
 
 // ============================================================================
@@ -30,6 +30,7 @@ interface IsolatedMessagesSectionProps {
     messageId: string
     textContent: string
     imageParts: any[]
+    skipTextMentionBlocks?: boolean
   }>
   ToolCallComponent: React.ComponentType<{
     icon: any
@@ -71,9 +72,26 @@ export const IsolatedMessagesSection = memo(function IsolatedMessagesSection({
   MessageGroupWrapper,
   toolRegistry,
 }: IsolatedMessagesSectionProps) {
-  // Subscribe to user message IDs only - NOT the full messages array
-  // This only changes when a new user message is added
+  // CRITICAL: Check if global atoms are synced for THIS subChat FIRST
+  // With keep-alive tabs, multiple ChatViewInner instances exist simultaneously.
+  // Global atoms (messageIdsAtom, etc.) contain data from the ACTIVE tab only.
+  // When a tab becomes active, useLayoutEffect syncs its messages to global atoms,
+  // but that happens AFTER this component renders. So on first render after activation,
+  // we might read stale data from the previous active tab.
+  //
+  // Solution: Check currentSubChatIdAtom BEFORE reading userMessageIdsAtom.
+  // If it doesn't match our subChatId, return empty to avoid showing wrong messages.
+  // The useLayoutEffect will sync and update currentSubChatIdAtom, which triggers
+  // a re-render of this component (since we're subscribed to it).
+  const currentSubChatId = useAtomValue(currentSubChatIdAtom)
+
+  // Subscribe to user message IDs - but only use them if we're the active chat
   const userMsgIds = useAtomValue(userMessageIdsAtom)
+
+  if (currentSubChatId !== subChatId) {
+    // Data not synced yet - render nothing, we'll re-render when currentSubChatIdAtom updates
+    return null
+  }
 
   return (
     <>

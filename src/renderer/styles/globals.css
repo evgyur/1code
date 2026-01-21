@@ -89,10 +89,14 @@
 
 /* Search highlight styles */
 .search-highlight {
-  background-color: rgb(249 115 22 / 0.8) !important;
-  color: hsl(0 0% 5%) !important;
+  background-color: rgb(250 204 21 / 0.35) !important;
+  color: inherit !important;
   border-radius: 2px;
-  padding: 0 1px;
+}
+
+.search-highlight-current {
+  background-color: rgb(250 204 21 / 0.85) !important;
+  color: hsl(0 0% 5%) !important;
 }
 
 /* Custom scrollbar */
