@@ -65,18 +65,22 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
   // Note: Update checking is now handled by auto-updater module (lib/auto-updater.ts)
   ipcMain.handle("app:set-badge", (_event, count: number | null) => {
     const win = getWindow()
+    console.log("[Main] setBadge called with count:", count)
     if (process.platform === "darwin") {
       // macOS: Use dock badge
       app.dock.setBadge(count ? String(count) : "")
+      console.log("[Main] macOS badge set to:", count ? String(count) : "")
     } else if (process.platform === "win32" && win) {
       // Windows: Use overlay icon with number badge
       if (count !== null && count > 0) {
         // Request badge icon from renderer (it will generate and send via IPC)
         // For now, show count in window title as fallback
         win.setTitle(`1Code (${count})`)
+        console.log("[Main] Windows badge: title set to 1Code (" + count + ")")
         // The actual overlay icon will be set when renderer sends the image data
       } else {
         win.setTitle("1Code")
+        console.log("[Main] Windows badge: clearing, title set to 1Code")
         // Clear overlay icon
         win.setOverlayIcon(null, "")
       }
@@ -86,42 +90,60 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
   // Handle badge icon data from renderer (Windows overlay icon)
   ipcMain.handle("app:set-badge-icon", (_event, imageData: string | null) => {
     const win = getWindow()
+    console.log("[Main] setBadgeIcon called, imageData length:", imageData ? imageData.length : 0)
     if (process.platform === "win32" && win) {
       if (imageData) {
         // Convert data URL to native image
         const image = nativeImage.createFromDataURL(imageData)
-        win.setOverlayIcon(image, `${imageData ? "New messages" : ""}`)
+        win.setOverlayIcon(image, "New messages")
+        console.log("[Main] Windows overlay icon set successfully")
       } else {
         win.setOverlayIcon(null, "")
+        console.log("[Main] Windows overlay icon cleared")
       }
     }
   })
   ipcMain.handle(
     "app:show-notification",
     (_event, options: { title: string; body: string }) => {
-      const { Notification } = require("electron")
-      // Electron Notification uses native Windows Notification API
-      // This will show a standard Windows desktop notification
-      const notification = new Notification({
-        title: options.title,
-        body: options.body,
-        // Windows-specific options
-        ...(process.platform === "win32" && {
-          // Use Windows 10+ action center
-          silent: false, // Play notification sound
-        }),
-      })
-      notification.show()
-      
-      // Optional: Handle notification click
-      notification.on("click", () => {
-        // Focus the main window when notification is clicked
-        const win = getWindow()
-        if (win) {
-          if (win.isMinimized()) win.restore()
-          win.focus()
-        }
-      })
+      try {
+        const { Notification } = require("electron")
+        const iconPath = join(__dirname, "../../../build/icon.ico")
+        const icon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined
+        
+        // Electron Notification uses native Windows Notification API
+        // This will show a standard Windows desktop notification
+        const notification = new Notification({
+          title: options.title,
+          body: options.body,
+          icon: icon, // Add app icon to notification
+          // Windows-specific options
+          ...(process.platform === "win32" && {
+            // Use Windows 10+ action center
+            silent: false, // Play notification sound
+          }),
+        })
+        
+        notification.show()
+        console.log("[Main] Notification shown:", options.title)
+        
+        // Optional: Handle notification click
+        notification.on("click", () => {
+          // Focus the main window when notification is clicked
+          const win = getWindow()
+          if (win) {
+            if (win.isMinimized()) win.restore()
+            win.focus()
+          }
+        })
+        
+        // Handle notification errors
+        notification.on("error", (error: Error) => {
+          console.error("[Main] Notification error:", error)
+        })
+      } catch (error) {
+        console.error("[Main] Failed to show notification:", error)
+      }
     },
   )
 

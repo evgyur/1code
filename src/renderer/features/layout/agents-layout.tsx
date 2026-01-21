@@ -29,6 +29,7 @@ import { WindowsTitleBar } from "../../components/windows-title-bar"
 import { useUpdateChecker } from "../../lib/hooks/use-update-checker"
 import { useAgentSubChatStore } from "../../lib/stores/sub-chat-store"
 import { QueueProcessor } from "../agents/components/queue-processor"
+import { useDesktopNotifications } from "../sidebar/hooks/use-desktop-notifications"
 
 // ============================================================================
 // Constants
@@ -84,6 +85,9 @@ export function AgentsLayout() {
 
   // Check for updates on mount and periodically
   useUpdateChecker()
+
+  // Initialize desktop notifications and badge count (must be at root level)
+  useDesktopNotifications()
 
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
   const [sidebarWidth, setSidebarWidth] = useAtom(agentsSidebarWidthAtom)

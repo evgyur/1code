@@ -28,6 +28,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "ts:check": "tsgo --noEmit",
+    "security:secrets": "node scripts/secret-scan.mjs --all",
+    "security:secrets:staged": "node scripts/secret-scan.mjs --staged",
     "postinstall": "node -e \"if(!process.env.VERCEL){require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})}\""
   },
   "dependencies": {

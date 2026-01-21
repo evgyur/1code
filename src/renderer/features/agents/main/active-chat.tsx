@@ -123,7 +123,7 @@ import { PreviewSetupHoverCard } from "../components/preview-setup-hover-card"
 import { TextSelectionProvider } from "../context/text-selection-context"
 import { useAgentsFileUpload } from "../hooks/use-agents-file-upload"
 import { useChangedFilesTracking } from "../hooks/use-changed-files-tracking"
-import { useDesktopNotifications } from "../hooks/use-desktop-notifications"
+import { useDesktopNotifications } from "../../sidebar/hooks/use-desktop-notifications"
 import { useFocusInputOnEnter } from "../hooks/use-focus-input-on-enter"
 import { useHaptic } from "../hooks/use-haptic"
 import { useTextContextSelection } from "../hooks/use-text-context-selection"
@@ -4029,6 +4029,7 @@ export function ChatView({
       if (prev.has(chatId)) {
         const next = new Set(prev)
         next.delete(chatId)
+        console.log("[Badge] Clearing unseen for chat:", chatId, "remaining unseen:", Array.from(next))
         return next
       }
       return prev
@@ -4826,28 +4827,34 @@ Make sure to preserve all functionality from both branches when resolving confli
 
           // Also mark parent chat as unseen if user is not viewing it
           if (!isViewingThisChat) {
+            console.log("[Badge] Marking chat as unseen:", chatId, "isViewingThisChat:", isViewingThisChat)
             setUnseenChanges((prev: Set<string>) => {
               const next = new Set(prev)
               next.add(chatId)
+              console.log("[Badge] Updated unseenChanges, new size:", next.size, "chats:", Array.from(next))
               return next
             })
+          } else {
+            console.log("[Badge] Not marking as unseen - user is viewing this chat:", chatId)
+          }
 
-            // Play completion sound only if NOT manually aborted and sound is enabled
-            if (!wasManuallyAborted) {
-              const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
-              if (isSoundEnabled) {
-                try {
-                  const audio = new Audio("./sound.mp3")
-                  audio.volume = 1.0
-                  audio.play().catch(() => {})
-                } catch {
-                  // Ignore audio errors
-                }
+          // Play completion sound and show notification if NOT manually aborted
+          // Show notification even if viewing chat - user might be in another app
+          if (!wasManuallyAborted) {
+            const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
+            if (isSoundEnabled && !isViewingThisChat) {
+              // Sound only plays when not viewing chat
+              try {
+                const audio = new Audio("./sound.mp3")
+                audio.volume = 1.0
+                audio.play().catch(() => {})
+              } catch {
+                // Ignore audio errors
               }
-
-              // Show native notification (desktop app, when window not focused)
-              notifyAgentComplete(agentChat?.name || "Agent")
             }
+
+            // Show native notification (always, if enabled in settings)
+            notifyAgentComplete(agentChat?.name || "Agent")
           }
 
           // Refresh diff stats after agent finishes making changes
@@ -4980,28 +4987,34 @@ Make sure to preserve all functionality from both branches when resolving confli
 
           // Also mark parent chat as unseen if user is not viewing it
           if (!isViewingThisChat) {
+            console.log("[Badge] Marking chat as unseen:", chatId, "isViewingThisChat:", isViewingThisChat)
             setUnseenChanges((prev: Set<string>) => {
               const next = new Set(prev)
               next.add(chatId)
+              console.log("[Badge] Updated unseenChanges, new size:", next.size, "chats:", Array.from(next))
               return next
             })
+          } else {
+            console.log("[Badge] Not marking as unseen - user is viewing this chat:", chatId)
+          }
 
-            // Play completion sound only if NOT manually aborted and sound is enabled
-            if (!wasManuallyAborted) {
-              const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
-              if (isSoundEnabled) {
-                try {
-                  const audio = new Audio("./sound.mp3")
-                  audio.volume = 1.0
-                  audio.play().catch(() => {})
-                } catch {
-                  // Ignore audio errors
-                }
+          // Play completion sound and show notification if NOT manually aborted
+          // Show notification even if viewing chat - user might be in another app
+          if (!wasManuallyAborted) {
+            const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
+            if (isSoundEnabled && !isViewingThisChat) {
+              // Sound only plays when not viewing chat
+              try {
+                const audio = new Audio("./sound.mp3")
+                audio.volume = 1.0
+                audio.play().catch(() => {})
+              } catch {
+                // Ignore audio errors
               }
-
-              // Show native notification (desktop app, when window not focused)
-              notifyAgentComplete(agentChat?.name || "Agent")
             }
+
+            // Show native notification (always, if enabled in settings)
+            notifyAgentComplete(agentChat?.name || "Agent")
           }
 
           // Refresh diff stats after agent finishes making changes

@@ -38,6 +38,21 @@ Analytics (PostHog) and error tracking (Sentry) are **disabled by default** in o
 3. Make your changes
 4. Submit a PR
 
+## Secret Scanning (pre-commit)
+
+Enable the local pre-commit hook to scan staged changes for secrets:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Manual scan:
+
+```bash
+bun run security:secrets        # all tracked files
+bun run security:secrets:staged # staged files only
+```
+
 Join our [Discord](https://discord.gg/8ektTZGnj4) for discussions.
 
 ## License
