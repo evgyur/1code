@@ -144,13 +144,24 @@ export async function createSession(
 		rootPath,
 	})
 
-	const ptyProcess = spawnPty({
-		shell,
-		cols: terminalCols,
-		rows: terminalRows,
-		cwd: workingDir,
-		env,
-	})
+	let ptyProcess: pty.IPty
+	try {
+		ptyProcess = spawnPty({
+			shell,
+			cols: terminalCols,
+			rows: terminalRows,
+			cwd: workingDir,
+			env,
+		})
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error)
+		console.error(`[Terminal] Failed to create PTY session:`, {
+			shell,
+			cwd: workingDir,
+			error: errorMessage,
+		})
+		throw new Error(`Cannot create process, error code: ${errorMessage}`)
+	}
 
 	const session: TerminalSession = {
 		pty: ptyProcess,

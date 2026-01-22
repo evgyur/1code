@@ -142,6 +142,14 @@ export function AgentsContent() {
     { enabled: !!selectedTeamId },
   )
 
+  // If persisted selected chat no longer exists, reset to a valid chat
+  useEffect(() => {
+    if (!agentChats) return
+    if (selectedChatId && !agentChats.some((chat: any) => chat.id === selectedChatId)) {
+      setSelectedChatId(agentChats.length > 0 ? agentChats[0].id : null)
+    }
+  }, [agentChats, selectedChatId, setSelectedChatId])
+
   // Fetch all projects for git info (like sidebar does)
   const { data: projects } = trpc.projects.list.useQuery()
 

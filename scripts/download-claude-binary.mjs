@@ -69,10 +69,15 @@ function downloadFile(url, destPath) {
             return request(res.headers.location)
           }
 
+          if (res.statusCode === 404) {
+            file.close()
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
+            return reject(new Error(`HTTP 404: Binary not found for version ${version} on platform ${platform.dir}. This version may not be available for Windows.`))
+          }
           if (res.statusCode !== 200) {
             file.close()
-            fs.unlinkSync(destPath)
-            return reject(new Error(`HTTP ${res.statusCode}`))
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
+            return reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage || 'Unknown error'}`))
           }
 
           const totalSize = parseInt(res.headers["content-length"], 10)
@@ -146,8 +151,10 @@ async function getLatestVersion() {
     // Fallback
   }
 
-  // Fallback to known version
-  return "2.1.5"
+  // Fallback to known working version with Windows support
+  // Try 2.1.8 first (latest with Windows support), then 2.0.61
+  console.warn("Could not fetch latest version, trying fallback: 2.1.8")
+  return "2.1.8"
 }
 
 /**
@@ -174,11 +181,21 @@ async function downloadPlatform(version, platformKey, manifest) {
   }
 
   const expectedHash = platformManifest.checksum
-  const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/${platform.binary}`
+  // For Windows, the URL needs to use 'claude.exe', not 'claude'
+  // For other platforms, it's just 'claude'
+  const binaryUrlName = platformKey === "win32-x64" ? "claude.exe" : "claude"
+  const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/${binaryUrlName}`
 
   console.log(`\nDownloading Claude Code for ${platformKey}...`)
   console.log(`  URL: ${downloadUrl}`)
   console.log(`  Size: ${(platformManifest.size / 1024 / 1024).toFixed(1)} MB`)
+  
+  // Check if platform is available in manifest
+  if (!platformManifest) {
+    console.error(`  ✗ Platform ${platform.dir} not available for version ${version}`)
+    console.error(`  Available platforms: ${Object.keys(manifest.platforms || {}).join(", ")}`)
+    return false
+  }
 
   // Check if already downloaded with correct hash
   if (fs.existsSync(targetPath)) {
@@ -225,8 +242,31 @@ async function main() {
   console.log("Claude Code Binary Downloader")
   console.log("=============================\n")
 
-  // Get version
-  const version = specifiedVersion || (await getLatestVersion())
+  // Get version - try to get latest, with fallback for Windows if needed
+  const currentPlatform = downloadAll ? null : `${process.platform}-${process.arch}`
+  let version = specifiedVersion
+  
+  if (!version) {
+    version = await getLatestVersion()
+    
+    // For Windows, verify the version supports Windows, otherwise use fallback
+    if (currentPlatform === "win32-x64") {
+      try {
+        const manifestUrl = `${DIST_BASE}/${version}/manifest.json`
+        const manifest = await fetchJson(manifestUrl)
+        if (!manifest.platforms || !manifest.platforms["win32-x64"]) {
+          console.log(`Version ${version} doesn't support Windows, using fallback: 2.1.8`)
+          version = "2.1.8"
+        } else {
+          console.log(`Windows detected - using version ${version} (has Windows support)`)
+        }
+      } catch (error) {
+        console.log(`Failed to verify Windows support for ${version}, using fallback: 2.1.8`)
+        version = "2.1.8"
+      }
+    }
+  }
+  
   console.log(`Version: ${version}`)
 
   // Fetch manifest
@@ -236,6 +276,23 @@ async function main() {
   let manifest
   try {
     manifest = await fetchJson(manifestUrl)
+    
+    // Verify platform support
+    if (currentPlatform) {
+      const platformDir = PLATFORMS[currentPlatform]?.dir
+      if (!platformDir) {
+        console.error(`Unknown platform: ${currentPlatform}`)
+        process.exit(1)
+      }
+      if (!manifest.platforms || !manifest.platforms[platformDir]) {
+        console.error(`✗ Version ${version} does not have support for ${currentPlatform}`)
+        if (manifest.platforms) {
+          console.error(`  Available platforms: ${Object.keys(manifest.platforms).join(", ")}`)
+        }
+        process.exit(1)
+      }
+      console.log(`✓ Version ${version} has support for ${currentPlatform}`)
+    }
   } catch (error) {
     console.error(`Failed to fetch manifest: ${error.message}`)
     process.exit(1)

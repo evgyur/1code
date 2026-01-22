@@ -1,0 +1,734 @@
+diff --git a/.github/workflows/build-windows.yml b/.github/workflows/build-windows.yml
+new file mode 100644
+index 0000000..2f65894
+--- /dev/null
++++ b/.github/workflows/build-windows.yml
+@@ -0,0 +1,90 @@
++name: Build Windows
++
++on:
++  workflow_dispatch:
++  push:
++    branches: [ main ]
++    paths:
++      - 'src/**'
++      - 'package.json'
++      - 'electron.vite.config.ts'
++      - '.github/workflows/**'
++  pull_request:
++    branches: [ main ]
++
++jobs:
++  build-windows:
++    runs-on: windows-latest
++    
++    steps:
++      - name: Checkout code
++        uses: actions/checkout@v4
++      
++      - name: Setup Python
++        uses: actions/setup-python@v5
++        with:
++          python-version: '3.11'
++      
++      - name: Install setuptools (provides distutils)
++        run: python -m pip install setuptools
++      
++      - name: Setup Node.js
++        uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++      
++      - name: Setup Bun
++        uses: oven-sh/setup-bun@v2
++        with:
++          bun-version: latest
++      
++      - name: Install dependencies
++        run: bun install
++      
++      - name: Download Claude binary
++        run: |
++          echo "Downloading Claude binary for Windows..."
++          echo "Node version: $(node --version)"
++          echo "Bun version: $(bun --version)"
++          echo "Current directory: $(Get-Location)"
++          echo "Platform: $env:OS"
++          node scripts/download-claude-binary.mjs
++          if ($LASTEXITCODE -ne 0) {
++            echo "✗ Download script failed with exit code $LASTEXITCODE"
++            exit 1
++          }
++          if (Test-Path "resources\bin\win32-x64\claude.exe") {
++            echo "✓ Binary downloaded successfully"
++            $file = Get-Item "resources\bin\win32-x64\claude.exe"
++            echo "File size: $($file.Length) bytes"
++          } else {
++            echo "✗ Binary not found after download"
++            echo "Checking resources\bin directory:"
++            if (Test-Path "resources\bin") {
++              Get-ChildItem -Recurse "resources\bin" -ErrorAction SilentlyContinue | Select-Object FullName
++            } else {
++              echo "resources\bin directory does not exist"
++            }
++            exit 1
++          }
++      
++      - name: Build application
++        run: bun run build
++      
++      - name: Package for Windows
++        run: bun run package:win
++      
++      - name: Upload artifacts
++        uses: actions/upload-artifact@v4
++        with:
++          name: windows-build
++          path: release/*.exe
++          retention-days: 30
++      
++      - name: Upload portable
++        uses: actions/upload-artifact@v4
++        with:
++          name: windows-portable
++          path: release/1Code*.exe
++          if-no-files-found: ignore
++          retention-days: 30
+diff --git a/scripts/download-claude-binary.mjs b/scripts/download-claude-binary.mjs
+index f444d0c..a23aeeb 100644
+--- a/scripts/download-claude-binary.mjs
++++ b/scripts/download-claude-binary.mjs
+@@ -69,10 +69,15 @@ function downloadFile(url, destPath) {
+             return request(res.headers.location)
+           }
+ 
++          if (res.statusCode === 404) {
++            file.close()
++            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
++            return reject(new Error(`HTTP 404: Binary not found for version ${version} on platform ${platform.dir}. This version may not be available for Windows.`))
++          }
+           if (res.statusCode !== 200) {
+             file.close()
+-            fs.unlinkSync(destPath)
+-            return reject(new Error(`HTTP ${res.statusCode}`))
++            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
++            return reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage || 'Unknown error'}`))
+           }
+ 
+           const totalSize = parseInt(res.headers["content-length"], 10)
+@@ -146,8 +151,9 @@ async function getLatestVersion() {
+     // Fallback
+   }
+ 
+-  // Fallback to known version
+-  return "2.1.5"
++  // Fallback to known working version (2.0.61 has Windows support)
++  console.warn("Could not fetch latest version, using fallback: 2.0.61")
++  return "2.0.61"
+ }
+ 
+ /**
+@@ -174,11 +180,21 @@ async function downloadPlatform(version, platformKey, manifest) {
+   }
+ 
+   const expectedHash = platformManifest.checksum
+-  const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/claude`
++  // For Windows, the URL needs to use 'claude.exe', not 'claude'
++  // For other platforms, it's just 'claude'
++  const binaryUrlName = platformKey === "win32-x64" ? "claude.exe" : "claude"
++  const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/${binaryUrlName}`
+ 
+   console.log(`\nDownloading Claude Code for ${platformKey}...`)
+   console.log(`  URL: ${downloadUrl}`)
+   console.log(`  Size: ${(platformManifest.size / 1024 / 1024).toFixed(1)} MB`)
++  
++  // Check if platform is available in manifest
++  if (!platformManifest) {
++    console.error(`  ✗ Platform ${platform.dir} not available for version ${version}`)
++    console.error(`  Available platforms: ${Object.keys(manifest.platforms || {}).join(", ")}`)
++    return false
++  }
+ 
+   // Check if already downloaded with correct hash
+   if (fs.existsSync(targetPath)) {
+@@ -225,8 +241,20 @@ async function main() {
+   console.log("Claude Code Binary Downloader")
+   console.log("=============================\n")
+ 
+-  // Get version
+-  const version = specifiedVersion || (await getLatestVersion())
++  // Get version - for Windows, use known working version since 2.1.5 doesn't have Windows binaries
++  const currentPlatform = downloadAll ? null : `${process.platform}-${process.arch}`
++  let version = specifiedVersion
++  
++  if (!version) {
++    if (currentPlatform === "win32-x64") {
++      // Windows: use known working version (2.1.5 doesn't have Windows binaries)
++      console.log("Windows detected - using known working version 2.0.61")
++      version = "2.0.61"
++    } else {
++      version = await getLatestVersion()
++    }
++  }
++  
+   console.log(`Version: ${version}`)
+ 
+   // Fetch manifest
+@@ -236,6 +264,23 @@ async function main() {
+   let manifest
+   try {
+     manifest = await fetchJson(manifestUrl)
++    
++    // Verify platform support
++    if (currentPlatform) {
++      const platformDir = PLATFORMS[currentPlatform]?.dir
++      if (!platformDir) {
++        console.error(`Unknown platform: ${currentPlatform}`)
++        process.exit(1)
++      }
++      if (!manifest.platforms || !manifest.platforms[platformDir]) {
++        console.error(`✗ Version ${version} does not have support for ${currentPlatform}`)
++        if (manifest.platforms) {
++          console.error(`  Available platforms: ${Object.keys(manifest.platforms).join(", ")}`)
++        }
++        process.exit(1)
++      }
++      console.log(`✓ Version ${version} has support for ${currentPlatform}`)
++    }
+   } catch (error) {
+     console.error(`Failed to fetch manifest: ${error.message}`)
+     process.exit(1)
+diff --git a/src/main/lib/git/worktree.ts b/src/main/lib/git/worktree.ts
+index 280d406..3615340 100644
+--- a/src/main/lib/git/worktree.ts
++++ b/src/main/lib/git/worktree.ts
+@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
+ import { randomBytes } from "node:crypto";
+ import { mkdir, readFile, stat } from "node:fs/promises";
+ import { join } from "node:path";
++import * as os from "node:os";
+ import { promisify } from "node:util";
+ import simpleGit from "simple-git";
+ import {
+@@ -905,7 +906,8 @@ export async function createWorktreeForChat(
+ 		const baseBranch = selectedBaseBranch || await getDefaultBranch(projectPath);
+ 
+ 		const branch = generateBranchName();
+-		const worktreesDir = join(process.env.HOME || "", ".21st", "worktrees");
++		const homeDir = os.homedir();
++		const worktreesDir = join(homeDir, ".21st", "worktrees");
+ 		const worktreePath = join(worktreesDir, projectId, chatId);
+ 
+ 		await createWorktree(projectPath, branch, worktreePath, `origin/${baseBranch}`);
+diff --git a/src/main/lib/trpc/routers/claude.ts b/src/main/lib/trpc/routers/claude.ts
+index 7f2472b..af965f4 100644
+--- a/src/main/lib/trpc/routers/claude.ts
++++ b/src/main/lib/trpc/routers/claude.ts
+@@ -2,6 +2,8 @@ import { observable } from "@trpc/server/observable"
+ import { eq } from "drizzle-orm"
+ import { app, safeStorage } from "electron"
+ import path from "path"
++import * as os from "os"
++import * as fs from "fs/promises"
+ import { z } from "zod"
+ import {
+   buildClaudeEnv,
+@@ -11,8 +13,57 @@ import {
+   logRawClaudeMessage,
+   type UIMessageChunk,
+ } from "../../claude"
+-import { chats, claudeCodeCredentials, getDatabase, subChats } from "../../db"
++import { chats, claudeCodeCredentials, getDatabase, projects, subChats } from "../../db"
+ import { publicProcedure, router } from "../index"
++import { buildAgentsOption } from "./agent-utils"
++
++/**
++ * Parse @[agent:name] and @[skill:name] mentions from prompt text
++ * Returns the cleaned prompt and lists of mentioned agents/skills
++ */
++function parseMentions(prompt: string): {
++  cleanedPrompt: string
++  agentMentions: string[]
++  skillMentions: string[]
++  fileMentions: string[]
++  folderMentions: string[]
++} {
++  const agentMentions: string[] = []
++  const skillMentions: string[] = []
++  const fileMentions: string[] = []
++  const folderMentions: string[] = []
++
++  // Match @[prefix:name] pattern
++  const mentionRegex = /@\[(file|folder|skill|agent):([^\]]+)\]/g
++  let match
++
++  while ((match = mentionRegex.exec(prompt)) !== null) {
++    const [, type, name] = match
++    switch (type) {
++      case "agent":
++        agentMentions.push(name)
++        break
++      case "skill":
++        skillMentions.push(name)
++        break
++      case "file":
++        fileMentions.push(name)
++        break
++      case "folder":
++        folderMentions.push(name)
++        break
++    }
++  }
++
++  // Clean agent/skill mentions from prompt (they will be added as context)
++  // Keep file/folder mentions as they are useful context
++  const cleanedPrompt = prompt
++    .replace(/@\[agent:[^\]]+\]/g, "")
++    .replace(/@\[skill:[^\]]+\]/g, "")
++    .trim()
++
++  return { cleanedPrompt, agentMentions, skillMentions, fileMentions, folderMentions }
++}
+ 
+ /**
+  * Decrypt token using Electron's safeStorage
+@@ -150,28 +201,130 @@ export const claudeRouter = router({
+             error instanceof Error ? error.message : String(error)
+           const errorStack = error instanceof Error ? error.stack : undefined
+ 
+-          console.error(`[claude] ${context}:`, errorMessage)
+-          if (errorStack) console.error("[claude] Stack:", errorStack)
++          console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
++          console.error(`║ ⚠️  ERROR EMITTED TO FRONTEND                              ║`)
++          console.error(`╠═══════════════════════════════════════════════════════════╣`)
++          console.error(`║ Context: ${context.padEnd(47)}║`)
++          console.error(`║ Error: ${errorMessage.substring(0, 47).padEnd(47)}║`)
++          console.error(`║ CWD: ${input.cwd.padEnd(53)}║`)
++          console.error(`║ Mode: ${input.mode.padEnd(53)}║`)
++          console.error(`║ SubChatId: ${input.subChatId.padEnd(45)}║`)
++          console.error(`╚═══════════════════════════════════════════════════════════╝`)
++          if (errorStack) {
++            console.error(`\nERROR STACK:\n${errorStack}\n`)
++          }
+ 
+-          // Send detailed error to frontend (safely)
++          // Send detailed error to frontend (safely) - ALWAYS include debug info
+           safeEmit({
+             type: "error",
+             errorText: `${context}: ${errorMessage}`,
+-            // Include extra debug info
+-            ...(process.env.NODE_ENV !== "production" && {
+-              debugInfo: {
+-                context,
+-                cwd: input.cwd,
+-                mode: input.mode,
+-                PATH: process.env.PATH?.slice(0, 200),
+-              },
+-            }),
++            debugInfo: {
++              context,
++              category: "UNKNOWN",
++              cwd: input.cwd,
++              mode: input.mode,
++              subChatId: input.subChatId,
++              errorMessage,
++              ...(errorStack && { errorStack }),
++            },
+           } as UIMessageChunk)
+         }
+ 
+         ;(async () => {
++          console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
++          console.error(`║ BACKEND: ASYNC FUNCTION STARTED                           ║`)
++          console.error(`╠═══════════════════════════════════════════════════════════╣`)
++          console.error(`║ SubChatId: ${input.subChatId.padEnd(47)}║`)
++          console.error(`║ ChatId: ${input.chatId.padEnd(51)}║`)
++          console.error(`║ CWD: ${input.cwd.padEnd(53)}║`)
++          console.error(`║ Mode: ${input.mode.padEnd(53)}║`)
++          console.error(`║ Prompt: "${input.prompt.substring(0, 45)}${input.prompt.length > 45 ? '...' : ''}"`.padEnd(59) + `║`)
++          console.error(`║ Prompt Length: ${String(input.prompt.length).padEnd(42)}║`)
++          console.error(`║ SessionId: ${(input.sessionId || 'none').padEnd(48)}║`)
++          console.error(`║ Images: ${String(input.images?.length || 0).padEnd(51)}║`)
++          console.error(`╚═══════════════════════════════════════════════════════════╝\n`)
++          
++          // Early validation - check cwd exists before doing anything
++          console.error(`[BACKEND] Step 1: Validating CWD...`)
++          console.error(`[BACKEND] Original CWD: ${input.cwd}`)
++          
++          // Resolve relative paths to absolute
++          let resolvedCwd: string
++          try {
++            if (path.isAbsolute(input.cwd)) {
++              resolvedCwd = input.cwd
++            } else {
++              // Resolve relative to user's home directory (worktrees are in ~/.21st/worktrees)
++              const homeDir = os.homedir()
++              resolvedCwd = path.resolve(homeDir, input.cwd)
++            }
++            console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
++          } catch (resolveError) {
++            const errorMsg = resolveError instanceof Error ? resolveError.message : String(resolveError)
++            console.error(`[BACKEND] ✗ CWD RESOLUTION FAILED: ${errorMsg}`)
++            emitError(new Error(`Failed to resolve CWD path: ${input.cwd} - ${errorMsg}`), "Workspace path resolution error")
++            safeEmit({ type: "finish" } as UIMessageChunk)
++            safeComplete()
++            return
++          }
++          
++          try {
++            const cwdStat = await fs.stat(resolvedCwd)
++            if (!cwdStat.isDirectory()) {
++              console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: Not a directory`)
++              emitError(new Error(`CWD is not a directory: ${resolvedCwd}`), "Invalid workspace path")
++              safeEmit({ type: "finish" } as UIMessageChunk)
++              safeComplete()
++              return
++            }
++            console.error(`[BACKEND] ✓ CWD VALIDATED: ${resolvedCwd}`)
++            
++            // Update input.cwd to the resolved absolute path for use in query
++            input.cwd = resolvedCwd
++          } catch (cwdError) {
++            const errorMsg = cwdError instanceof Error ? cwdError.message : String(cwdError)
++            console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: ${errorMsg}`)
++            console.error(`[BACKEND] Original CWD: ${input.cwd}`)
++            console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
++            console.error(`[BACKEND] Error Details:`, cwdError)
++            
++            // Try to get project path from database as fallback
++            try {
++              console.error(`[BACKEND] Attempting fallback: Getting project path from database...`)
++              const db = getDatabase()
++              const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
++              if (chat?.projectId) {
++                const project = db.select().from(projects).where(eq(projects.id, chat.projectId)).get()
++                if (project?.path) {
++                  const projectPathExists = await fs.stat(project.path).then(() => true).catch(() => false)
++                  if (projectPathExists) {
++                    console.error(`[BACKEND] ✓ Found project path: ${project.path}`)
++                    resolvedCwd = project.path
++                    input.cwd = project.path
++                    console.error(`[BACKEND] Using project path as fallback (worktree missing)`)
++                  } else {
++                    throw new Error(`Project path exists in DB but is inaccessible: ${project.path}`)
++                  }
++                } else {
++                  throw new Error(`Project not found in database`)
++                }
++              } else {
++                throw new Error(`Chat has no projectId`)
++              }
++            } catch (fallbackError) {
++              const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
++              console.error(`[BACKEND] ✗ Fallback failed: ${fallbackMsg}`)
++              emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}\n\nWorktree may have been deleted. Please recreate the workspace.`), "Workspace path error")
++              safeEmit({ type: "finish" } as UIMessageChunk)
++              safeComplete()
++              return
++            }
++          }
++          
+           try {
++            console.error(`[BACKEND] Step 2: Accessing database...`)
+             const db = getDatabase()
++            console.error(`[BACKEND] ✓ Database accessed`)
+ 
+             // 1. Get existing messages from DB
+             const existing = db
+@@ -214,10 +367,16 @@ export const claudeRouter = router({
+             }
+ 
+             // 3. Get Claude SDK
++            console.error(`[BACKEND] Step 3: Loading Claude SDK...`)
+             let claudeQuery
+             try {
+               claudeQuery = await getClaudeQuery()
++              console.error(`[BACKEND] ✓ Claude SDK loaded successfully`)
+             } catch (sdkError) {
++              const errorMsg = sdkError instanceof Error ? sdkError.message : String(sdkError)
++              const errorStack = sdkError instanceof Error ? sdkError.stack : undefined
++              console.error(`[BACKEND] ✗ SDK LOAD FAILED: ${errorMsg}`)
++              console.error(`[BACKEND] Error Stack:`, errorStack)
+               emitError(sdkError, "Failed to load Claude SDK")
+               console.log(`[SD] M:END sub=${subId} reason=sdk_load_error n=${chunkCount}`)
+               safeEmit({ type: "finish" } as UIMessageChunk)
+@@ -235,9 +394,42 @@ export const claudeRouter = router({
+             // Capture stderr from Claude process for debugging
+             const stderrLines: string[] = []
+ 
++            // Parse mentions from prompt (agents, skills, files, folders)
++            const { cleanedPrompt, agentMentions, skillMentions } = parseMentions(input.prompt)
++
++            // Build agents option for SDK (proper registration via options.agents)
++            const agentsOption = await buildAgentsOption(agentMentions, input.cwd)
++
++            // Log if agents were mentioned
++            if (agentMentions.length > 0) {
++              console.log(`[claude] Registering agents via SDK:`, Object.keys(agentsOption))
++            }
++
++            // Log if skills were mentioned
++            if (skillMentions.length > 0) {
++              console.log(`[claude] Skills mentioned:`, skillMentions)
++            }
++
++            // Build final prompt with skill instructions if needed
++            let finalPrompt = cleanedPrompt
++
++            // Handle empty prompt when only mentions are present
++            if (!finalPrompt.trim()) {
++              if (agentMentions.length > 0 && skillMentions.length > 0) {
++                finalPrompt = `Use the ${agentMentions.join(", ")} agent(s) and invoke the "${skillMentions.join('", "')}" skill(s) using the Skill tool for this task.`
++              } else if (agentMentions.length > 0) {
++                finalPrompt = `Use the ${agentMentions.join(", ")} agent(s) for this task.`
++              } else if (skillMentions.length > 0) {
++                finalPrompt = `Invoke the "${skillMentions.join('", "')}" skill(s) using the Skill tool for this task.`
++              }
++            } else if (skillMentions.length > 0) {
++              // Append skill instruction to existing prompt
++              finalPrompt = `${finalPrompt}\n\nUse the "${skillMentions.join('", "')}" skill(s) for this task.`
++            }
++
+             // Build prompt: if there are images, create an AsyncIterable<SDKUserMessage>
+             // Otherwise use simple string prompt
+-            let prompt: string | AsyncIterable<any> = input.prompt
++            let prompt: string | AsyncIterable<any> = finalPrompt
+ 
+             if (input.images && input.images.length > 0) {
+               // Create message content array with images first, then text
+@@ -253,10 +445,10 @@ export const claudeRouter = router({
+               ]
+ 
+               // Add text if present
+-              if (input.prompt.trim()) {
++              if (finalPrompt.trim()) {
+                 messageContent.push({
+                   type: "text" as const,
+-                  text: input.prompt,
++                  text: finalPrompt,
+                 })
+               }
+ 
+@@ -295,6 +487,44 @@ export const claudeRouter = router({
+               input.subChatId
+             )
+ 
++            // Ensure isolated config dir exists and symlink skills/agents from ~/.claude/
++            // This is needed because SDK looks for skills at $CLAUDE_CONFIG_DIR/skills/
++            try {
++              await fs.mkdir(isolatedConfigDir, { recursive: true })
++
++              const homeClaudeDir = path.join(os.homedir(), ".claude")
++              const skillsSource = path.join(homeClaudeDir, "skills")
++              const skillsTarget = path.join(isolatedConfigDir, "skills")
++              const agentsSource = path.join(homeClaudeDir, "agents")
++              const agentsTarget = path.join(isolatedConfigDir, "agents")
++
++              // Symlink skills directory if source exists and target doesn't
++              try {
++                const skillsSourceExists = await fs.stat(skillsSource).then(() => true).catch(() => false)
++                const skillsTargetExists = await fs.lstat(skillsTarget).then(() => true).catch(() => false)
++                if (skillsSourceExists && !skillsTargetExists) {
++                  await fs.symlink(skillsSource, skillsTarget, "dir")
++                  console.log(`[claude] Symlinked skills: ${skillsTarget} -> ${skillsSource}`)
++                }
++              } catch (symlinkErr) {
++                // Ignore symlink errors (might already exist or permission issues)
++              }
++
++              // Symlink agents directory if source exists and target doesn't
++              try {
++                const agentsSourceExists = await fs.stat(agentsSource).then(() => true).catch(() => false)
++                const agentsTargetExists = await fs.lstat(agentsTarget).then(() => true).catch(() => false)
++                if (agentsSourceExists && !agentsTargetExists) {
++                  await fs.symlink(agentsSource, agentsTarget, "dir")
++                  console.log(`[claude] Symlinked agents: ${agentsTarget} -> ${agentsSource}`)
++                }
++              } catch (symlinkErr) {
++                // Ignore symlink errors (might already exist or permission issues)
++              }
++            } catch (mkdirErr) {
++              console.error(`[claude] Failed to setup isolated config dir:`, mkdirErr)
++            }
++
+             // Build final env - only add OAuth token if we have one
+             const finalEnv = {
+               ...claudeEnv,
+@@ -306,7 +536,36 @@ export const claudeRouter = router({
+             }
+ 
+             // Get bundled Claude binary path
++            console.error(`[BACKEND] Step 4: Checking Claude binary...`)
+             const claudeBinaryPath = getBundledClaudeBinaryPath()
++            console.error(`[BACKEND] Binary Path: ${claudeBinaryPath}`)
++            
++            // Validate binary exists
++            try {
++              const binaryExists = await fs.access(claudeBinaryPath).then(() => true).catch(() => false)
++              if (!binaryExists) {
++                console.error(`[BACKEND] ✗ BINARY NOT FOUND at: ${claudeBinaryPath}`)
++                emitError(
++                  new Error(`Claude binary not found at: ${claudeBinaryPath}\n\nRun 'bun run claude:download' to download it.`),
++                  "Claude binary missing"
++                )
++                safeEmit({ type: "finish" } as UIMessageChunk)
++                safeComplete()
++                return
++              }
++              console.error(`[BACKEND] ✓ Binary found and accessible`)
++            } catch (binaryError) {
++              const errorMsg = binaryError instanceof Error ? binaryError.message : String(binaryError)
++              console.error(`[BACKEND] ✗ BINARY CHECK FAILED: ${errorMsg}`)
++              console.error(`[BACKEND] Binary Path: ${claudeBinaryPath}`)
++              emitError(
++                new Error(`Failed to check Claude binary: ${errorMsg}`),
++                "Binary validation error"
++              )
++              safeEmit({ type: "finish" } as UIMessageChunk)
++              safeComplete()
++              return
++            }
+ 
+             const resumeSessionId = input.sessionId || existingSessionId || undefined
+             const queryOptions = {
+@@ -317,8 +576,9 @@ export const claudeRouter = router({
+                 systemPrompt: {
+                   type: "preset" as const,
+                   preset: "claude_code" as const,
+-                  append: " ",
+                 },
++                // Register mentioned agents with SDK via options.agents
++                ...(Object.keys(agentsOption).length > 0 && { agents: agentsOption }),
+                 env: finalEnv,
+                 permissionMode:
+                   input.mode === "plan"
+@@ -370,12 +630,43 @@ export const claudeRouter = router({
+                       })
+                     })
+ 
++                    // Find the tool part in accumulated parts
++                    const askToolPart = parts.find(
++                      (p) => p.toolCallId === toolUseID && p.type === "tool-AskUserQuestion"
++                    )
++
+                     if (!response.approved) {
++                      // Update the tool part with error result for skipped/denied
++                      const errorMessage = response.message || "Skipped"
++                      if (askToolPart) {
++                        askToolPart.result = errorMessage
++                        askToolPart.state = "result"
++                      }
++                      // Emit result to frontend so it updates in real-time
++                      safeEmit({
++                        type: "ask-user-question-result",
++                        toolUseId: toolUseID,
++                        result: errorMessage,
++                      } as UIMessageChunk)
+                       return {
+                         behavior: "deny",
+-                        message: response.message || "Skipped",
++                        message: errorMessage,
+                       }
+                     }
++
++                    // Update the tool part with answers result for approved
++                    const answers = (response.updatedInput as any)?.answers
++                    const answerResult = { answers }
++                    if (askToolPart) {
++                      askToolPart.result = answerResult
++                      askToolPart.state = "result"
++                    }
++                    // Emit result to frontend so it updates in real-time
++                    safeEmit({
++                      type: "ask-user-question-result",
++                      toolUseId: toolUseID,
++                      result: answerResult,
++                    } as UIMessageChunk)
+                     return {
+                       behavior: "allow",
+                       updatedInput: response.updatedInput,
+@@ -405,15 +696,34 @@ export const claudeRouter = router({
+             }
+ 
+             // 5. Run Claude SDK
+-            let stream
++            console.error(`[BACKEND] Step 5: Creating Claude query stream...`)
++            console.error(`[BACKEND] Query Options:`, {
++              cwd: input.cwd,
++              mode: input.mode,
++              hasToken: !!claudeCodeToken,
++              binaryPath: claudeBinaryPath,
++              resumeSessionId: resumeSessionId || "new",
++              promptType: typeof prompt,
++              promptLength: typeof prompt === "string" ? prompt.length : "async",
++            })
++            
++            let stream: AsyncIterable<any>
+             try {
+               stream = claudeQuery(queryOptions)
++              console.error(`[BACKEND] ✓ Query stream created`)
++              
++              // Verify stream is actually an async iterable
++              if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
++                throw new Error(`Stream is not async iterable: ${typeof stream}`)
++              }
++              console.error(`[BACKEND] ✓ Stream is async iterable`)
+             } catch (queryError) {
+-              console.error(
+-                "[CLAUDE] ✗ Failed to create SDK query:",
+-                queryError,
+-              )
+-              emitError(queryError, "Failed to start Claude query")
++              const errorMessage = queryError instanceof Error ? queryError.message : String(queryError)
++              const errorStack = queryError instanceof Error ? queryError.stack : undefined
++              console.error(`[BACKEND] ✗ QUERY CREATION FAILED: ${errorMessage}`)
++              console.error(`[BACKEND] Error Stack:`, errorStack)
++              console.error(`[BACKEND] Query Options:`, JSON.stringify(queryOptions, null, 2))
++              emitError(queryError, `Failed to start Claude query: ${errorMessage}`)
+               console.log(`[SD] M:END sub=${subId} reason=query_error n=${chunkCount}`)
+               safeEmit({ type: "finish" } as UIMessageChunk)
+               safeComplete()
+@@ -426,10 +736,32 @@ export const claudeRouter = router({
+             let exitPlanModeToolCallId: string | null = null // Track ExitPlanMode's toolCallId
+ 
+             try {
++              console.error(`[BACKEND] Step 6: Starting stream iteration...`)
++              let streamIterationCount = 0
++              let lastMessageType: string | null = null
++              
+               for await (const msg of stream) {
+-                if (abortController.signal.aborted) break
++                if (abortController.signal.aborted) {
++                  console.error(`[BACKEND] Stream aborted at iteration ${streamIterationCount}`)
++                  break
++                }
+ 
+                 messageCount++
++                streamIterationCount++
++                lastMessageType = (msg as any)?.type || "unknown"
++                
++                if (streamIterationCount === 1) {
++                  console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
++                  console.error(`║ FIRST MESSAGE FROM STREAM                                 ║`)
++                  console.error(`╠═══════════════════════════════════════════════════════════╣`)
++                  console.error(`║ Type: ${String(lastMessageType).padEnd(53)}║`)
++                  console.error(`╚═══════════════════════════════════════════════════════════╝`)
++                  console.error(`\nFULL MESSAGE:\n${JSON.stringify(msg, null, 2)}\n`)
++                }
++                
++                if (streamIterationCount <= 3) {
++                  console.error(`[BACKEND] Message ${streamIterationCount}: type=${lastMessageType}`)
++                }
+ 
+                 // Log raw message for debugging
+                 logRawClaudeMessage(input.chatId, msg)
+@@ -545,9 +877,6 @@ export const claudeRouter = router({
+                       })
+                       break
+                     case "tool-output-available":
+-                      // DEBUG: Log all tool outputs
+-                      console.log(`[SD] M:TOOL_OUTPUT sub=${subId} callId=${chunk.toolCallId} mode=${input.mode}`)
+-
+                       const toolPart = parts.find(
+                         (p) =>
+                           p.type?.startsWith("tool-") &&

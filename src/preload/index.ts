@@ -1,12 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron"
 import { exposeElectronTRPC } from "trpc-electron/main"
 
-// Only initialize Sentry in production to avoid IPC errors in dev mode
-if (process.env.NODE_ENV === "production") {
-  import("@sentry/electron/renderer").then((Sentry) => {
-    Sentry.init()
-  })
-}
+// Note: Sentry should NOT be initialized in preload script
+// Preload runs in isolated context and Sentry IPC won't work here
+// Sentry is initialized in main process and renderer process only
 
 // Expose tRPC IPC bridge for type-safe communication
 exposeElectronTRPC()
@@ -75,8 +72,6 @@ contextBridge.exposeInMainWorld("desktopApi", {
   windowIsFullscreen: () => ipcRenderer.invoke("window:is-fullscreen"),
   setTrafficLightVisibility: (visible: boolean) =>
     ipcRenderer.invoke("window:set-traffic-light-visibility", visible),
-
-  // Windows-specific: Frame preference (native vs frameless)
   setWindowFramePreference: (useNativeFrame: boolean) =>
     ipcRenderer.invoke("window:set-frame-preference", useNativeFrame),
   getWindowFrameState: () => ipcRenderer.invoke("window:get-frame-state"),

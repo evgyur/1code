@@ -12,7 +12,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "package": "electron-builder --dir",
+    "package": "node scripts/package-windows.mjs",
     "package:mac": "electron-builder --mac",
     "package:win": "electron-builder --win",
     "package:linux": "electron-builder --linux",
@@ -28,6 +28,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "ts:check": "tsgo --noEmit",
+    "security:secrets": "node scripts/secret-scan.mjs --all",
+    "security:secrets:staged": "node scripts/secret-scan.mjs --staged",
     "postinstall": "node -e \"if(!process.env.VERCEL){require('child_process').execSync('electron-rebuild -f -w better-sqlite3,node-pty',{stdio:'inherit'})}\""
   },
   "dependencies": {
@@ -126,7 +128,18 @@
   "build": {
     "appId": "dev.21st.agents",
     "productName": "1Code",
-    "npmRebuild": true,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico",
+      "sign": null,
+      "signDlls": false,
+      "signingHashAlgorithms": null,
+      "forceCodeSigning": false,
+      "executableName": "1Code"
+    },
     "protocols": [
       {
         "name": "1Code",
@@ -162,6 +175,7 @@
     "asar": true,
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
       "node_modules/node-pty/**/*",
       "node_modules/@anthropic-ai/claude-agent-sdk/**/*"
     ],
@@ -208,13 +222,6 @@
         }
       ],
       "iconSize": 80
-    },
-    "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ],
-      "icon": "build/icon.ico"
     },
     "linux": {
       "target": [

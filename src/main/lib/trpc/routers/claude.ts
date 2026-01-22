@@ -15,7 +15,7 @@ import {
   checkOfflineFallback,
   type UIMessageChunk,
 } from "../../claude"
-import { chats, claudeCodeCredentials, getDatabase, subChats } from "../../db"
+import { chats, claudeCodeCredentials, getDatabase, projects, subChats } from "../../db"
 import { createRollbackStash } from "../../git/stash"
 import { checkInternetConnection, checkOllamaStatus, getOllamaConfig } from "../../ollama"
 import { publicProcedure, router } from "../index"
@@ -484,9 +484,13 @@ export const claudeRouter = router({
         // Track if observable is still active (not unsubscribed)
         let isObservableActive = true
 
-        // Helper to safely emit (no-op if already unsubscribed)
+        // Helper to safely emit (no-op if already unsubscribed or aborted)
         const safeEmit = (chunk: UIMessageChunk) => {
           if (!isObservableActive) return false
+          if (abortController.signal.aborted) {
+            console.log(`[SD] M:ABORT_BLOCK_EMIT sub=${subId} type=${chunk.type}`)
+            return false
+          }
           try {
             emit.next(chunk)
             return true
@@ -511,28 +515,130 @@ export const claudeRouter = router({
             error instanceof Error ? error.message : String(error)
           const errorStack = error instanceof Error ? error.stack : undefined
 
-          console.error(`[claude] ${context}:`, errorMessage)
-          if (errorStack) console.error("[claude] Stack:", errorStack)
+          console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+          console.error(`║ ⚠️  ERROR EMITTED TO FRONTEND                              ║`)
+          console.error(`╠═══════════════════════════════════════════════════════════╣`)
+          console.error(`║ Context: ${context.padEnd(47)}║`)
+          console.error(`║ Error: ${errorMessage.substring(0, 47).padEnd(47)}║`)
+          console.error(`║ CWD: ${input.cwd.padEnd(53)}║`)
+          console.error(`║ Mode: ${input.mode.padEnd(53)}║`)
+          console.error(`║ SubChatId: ${input.subChatId.padEnd(45)}║`)
+          console.error(`╚═══════════════════════════════════════════════════════════╝`)
+          if (errorStack) {
+            console.error(`\nERROR STACK:\n${errorStack}\n`)
+          }
 
-          // Send detailed error to frontend (safely)
+          // Send detailed error to frontend (safely) - ALWAYS include debug info
           safeEmit({
             type: "error",
             errorText: `${context}: ${errorMessage}`,
-            // Include extra debug info
-            ...(process.env.NODE_ENV !== "production" && {
-              debugInfo: {
-                context,
-                cwd: input.cwd,
-                mode: input.mode,
-                PATH: process.env.PATH?.slice(0, 200),
-              },
-            }),
+            debugInfo: {
+              context,
+              category: "UNKNOWN",
+              cwd: input.cwd,
+              mode: input.mode,
+              subChatId: input.subChatId,
+              errorMessage,
+              ...(errorStack && { errorStack }),
+            },
           } as UIMessageChunk)
         }
 
         ;(async () => {
+          console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+          console.error(`║ BACKEND: ASYNC FUNCTION STARTED                           ║`)
+          console.error(`╠═══════════════════════════════════════════════════════════╣`)
+          console.error(`║ SubChatId: ${input.subChatId.padEnd(47)}║`)
+          console.error(`║ ChatId: ${input.chatId.padEnd(51)}║`)
+          console.error(`║ CWD: ${input.cwd.padEnd(53)}║`)
+          console.error(`║ Mode: ${input.mode.padEnd(53)}║`)
+          console.error(`║ Prompt: "${input.prompt.substring(0, 45)}${input.prompt.length > 45 ? '...' : ''}"`.padEnd(59) + `║`)
+          console.error(`║ Prompt Length: ${String(input.prompt.length).padEnd(42)}║`)
+          console.error(`║ SessionId: ${(input.sessionId || 'none').padEnd(48)}║`)
+          console.error(`║ Images: ${String(input.images?.length || 0).padEnd(51)}║`)
+          console.error(`╚═══════════════════════════════════════════════════════════╝\n`)
+          
+          // Early validation - check cwd exists before doing anything
+          console.error(`[BACKEND] Step 1: Validating CWD...`)
+          console.error(`[BACKEND] Original CWD: ${input.cwd}`)
+          
+          // Resolve relative paths to absolute
+          let resolvedCwd: string
           try {
+            if (path.isAbsolute(input.cwd)) {
+              resolvedCwd = input.cwd
+            } else {
+              // Resolve relative to user's home directory (worktrees are in ~/.21st/worktrees)
+              const homeDir = os.homedir()
+              resolvedCwd = path.resolve(homeDir, input.cwd)
+            }
+            console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
+          } catch (resolveError) {
+            const errorMsg = resolveError instanceof Error ? resolveError.message : String(resolveError)
+            console.error(`[BACKEND] ✗ CWD RESOLUTION FAILED: ${errorMsg}`)
+            emitError(new Error(`Failed to resolve CWD path: ${input.cwd} - ${errorMsg}`), "Workspace path resolution error")
+            safeEmit({ type: "finish" } as UIMessageChunk)
+            safeComplete()
+            return
+          }
+          
+          try {
+            const cwdStat = await fs.stat(resolvedCwd)
+            if (!cwdStat.isDirectory()) {
+              console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: Not a directory`)
+              emitError(new Error(`CWD is not a directory: ${resolvedCwd}`), "Invalid workspace path")
+              safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
+            console.error(`[BACKEND] ✓ CWD VALIDATED: ${resolvedCwd}`)
+            
+            // Update input.cwd to the resolved absolute path for use in query
+            input.cwd = resolvedCwd
+          } catch (cwdError) {
+            const errorMsg = cwdError instanceof Error ? cwdError.message : String(cwdError)
+            console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: ${errorMsg}`)
+            console.error(`[BACKEND] Original CWD: ${input.cwd}`)
+            console.error(`[BACKEND] Resolved CWD: ${resolvedCwd}`)
+            console.error(`[BACKEND] Error Details:`, cwdError)
+            
+            // Try to get project path from database as fallback
+            try {
+              console.error(`[BACKEND] Attempting fallback: Getting project path from database...`)
+              const db = getDatabase()
+              const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+              if (chat?.projectId) {
+                const project = db.select().from(projects).where(eq(projects.id, chat.projectId)).get()
+                if (project?.path) {
+                  const projectPathExists = await fs.stat(project.path).then(() => true).catch(() => false)
+                  if (projectPathExists) {
+                    console.error(`[BACKEND] ✓ Found project path: ${project.path}`)
+                    resolvedCwd = project.path
+                    input.cwd = project.path
+                    console.error(`[BACKEND] Using project path as fallback (worktree missing)`)
+                  } else {
+                    throw new Error(`Project path exists in DB but is inaccessible: ${project.path}`)
+                  }
+                } else {
+                  throw new Error(`Project not found in database`)
+                }
+              } else {
+                throw new Error(`Chat has no projectId`)
+              }
+            } catch (fallbackError) {
+              const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+              console.error(`[BACKEND] ✗ Fallback failed: ${fallbackMsg}`)
+              emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}\n\nWorktree may have been deleted. Please recreate the workspace.`), "Workspace path error")
+              safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
+          }
+          
+          try {
+            console.error(`[BACKEND] Step 2: Accessing database...`)
             const db = getDatabase()
+            console.error(`[BACKEND] ✓ Database accessed`)
 
             // 1. Get existing messages from DB
             const existing = db
@@ -600,10 +706,16 @@ export const claudeRouter = router({
             // (emitting text-delta without text-start breaks UI text rendering)
 
             // 3. Get Claude SDK
+            console.error(`[BACKEND] Step 3: Loading Claude SDK...`)
             let claudeQuery
             try {
               claudeQuery = await getClaudeQuery()
+              console.error(`[BACKEND] ✓ Claude SDK loaded successfully`)
             } catch (sdkError) {
+              const errorMsg = sdkError instanceof Error ? sdkError.message : String(sdkError)
+              const errorStack = sdkError instanceof Error ? sdkError.stack : undefined
+              console.error(`[BACKEND] ✗ SDK LOAD FAILED: ${errorMsg}`)
+              console.error(`[BACKEND] Error Stack:`, errorStack)
               emitError(sdkError, "Failed to load Claude SDK")
               console.log(`[SD] M:END sub=${subId} reason=sdk_load_error n=${chunkCount}`)
               safeEmit({ type: "finish" } as UIMessageChunk)
@@ -820,7 +932,36 @@ export const claudeRouter = router({
             }
 
             // Get bundled Claude binary path
+            console.error(`[BACKEND] Step 4: Checking Claude binary...`)
             const claudeBinaryPath = getBundledClaudeBinaryPath()
+            console.error(`[BACKEND] Binary Path: ${claudeBinaryPath}`)
+            
+            // Validate binary exists
+            try {
+              const binaryExists = await fs.access(claudeBinaryPath).then(() => true).catch(() => false)
+              if (!binaryExists) {
+                console.error(`[BACKEND] ✗ BINARY NOT FOUND at: ${claudeBinaryPath}`)
+                emitError(
+                  new Error(`Claude binary not found at: ${claudeBinaryPath}\n\nRun 'bun run claude:download' to download it.`),
+                  "Claude binary missing"
+                )
+                safeEmit({ type: "finish" } as UIMessageChunk)
+                safeComplete()
+                return
+              }
+              console.error(`[BACKEND] ✓ Binary found and accessible`)
+            } catch (binaryError) {
+              const errorMsg = binaryError instanceof Error ? binaryError.message : String(binaryError)
+              console.error(`[BACKEND] ✗ BINARY CHECK FAILED: ${errorMsg}`)
+              console.error(`[BACKEND] Binary Path: ${claudeBinaryPath}`)
+              emitError(
+                new Error(`Failed to check Claude binary: ${errorMsg}`),
+                "Binary validation error"
+              )
+              safeEmit({ type: "finish" } as UIMessageChunk)
+              safeComplete()
+              return
+            }
 
             const resumeSessionId = input.sessionId || existingSessionId || undefined
 
@@ -1250,15 +1391,34 @@ ${prompt}
             }
 
             // 5. Run Claude SDK
-            let stream
+            console.error(`[BACKEND] Step 5: Creating Claude query stream...`)
+            console.error(`[BACKEND] Query Options:`, {
+              cwd: input.cwd,
+              mode: input.mode,
+              hasToken: !!claudeCodeToken,
+              binaryPath: claudeBinaryPath,
+              resumeSessionId: resumeSessionId || "new",
+              promptType: typeof prompt,
+              promptLength: typeof prompt === "string" ? prompt.length : "async",
+            })
+            
+            let stream: AsyncIterable<any>
             try {
               stream = claudeQuery(queryOptions)
+              console.error(`[BACKEND] ✓ Query stream created`)
+              
+              // Verify stream is actually an async iterable
+              if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
+                throw new Error(`Stream is not async iterable: ${typeof stream}`)
+              }
+              console.error(`[BACKEND] ✓ Stream is async iterable`)
             } catch (queryError) {
-              console.error(
-                "[CLAUDE] ✗ Failed to create SDK query:",
-                queryError,
-              )
-              emitError(queryError, "Failed to start Claude query")
+              const errorMessage = queryError instanceof Error ? queryError.message : String(queryError)
+              const errorStack = queryError instanceof Error ? queryError.stack : undefined
+              console.error(`[BACKEND] ✗ QUERY CREATION FAILED: ${errorMessage}`)
+              console.error(`[BACKEND] Error Stack:`, errorStack)
+              console.error(`[BACKEND] Query Options:`, JSON.stringify(queryOptions, null, 2))
+              emitError(queryError, `Failed to start Claude query: ${errorMessage}`)
               console.log(`[SD] M:END sub=${subId} reason=query_error n=${chunkCount}`)
               safeEmit({ type: "finish" } as UIMessageChunk)
               safeComplete()
@@ -1281,13 +1441,34 @@ ${prompt}
             }
 
             try {
+              console.error(`[BACKEND] Step 6: Starting stream iteration...`)
+              let streamIterationCount = 0
+              let lastMessageType: string | null = null
+              
               for await (const msg of stream) {
+                // Check abort signal immediately - don't process if aborted
                 if (abortController.signal.aborted) {
+                  console.log(`[SD] M:ABORT_STREAM_LOOP sub=${subId} iteration=${streamIterationCount}`)
                   if (isUsingOllama) console.log(`[Ollama] Stream aborted by user`)
                   break
                 }
 
                 messageCount++
+                streamIterationCount++
+                lastMessageType = (msg as any)?.type || "unknown"
+                
+                if (streamIterationCount === 1) {
+                  console.error(`\n╔═══════════════════════════════════════════════════════════╗`)
+                  console.error(`║ FIRST MESSAGE FROM STREAM                                 ║`)
+                  console.error(`╠═══════════════════════════════════════════════════════════╣`)
+                  console.error(`║ Type: ${String(lastMessageType).padEnd(53)}║`)
+                  console.error(`╚═══════════════════════════════════════════════════════════╝`)
+                  console.error(`\nFULL MESSAGE:\n${JSON.stringify(msg, null, 2)}\n`)
+                }
+                
+                if (streamIterationCount <= 3) {
+                  console.error(`[BACKEND] Message ${streamIterationCount}: type=${lastMessageType}`)
+                }
 
                 // Extra logging for Ollama to diagnose issues
                 if (isUsingOllama) {
@@ -1329,6 +1510,13 @@ ${prompt}
                 if (msgAny.type === "error" || msgAny.error) {
                   const sdkError =
                     msgAny.error || msgAny.message || "Unknown SDK error"
+                  const sdkErrorPayload = {
+                    type: msgAny.type,
+                    error: msgAny.error,
+                    message: msgAny.message,
+                    code: msgAny.code,
+                    status: msgAny.status,
+                  }
                   lastError = new Error(sdkError)
 
                   // Categorize SDK-level errors
@@ -1371,10 +1559,11 @@ ${prompt}
                   } else {
                     safeEmit({
                       type: "error",
-                      errorText: errorContext,
+                      errorText: `${errorContext}: ${sdkError}`,
                       debugInfo: {
                         category: errorCategory,
                         sdkError: sdkError,
+                        sdkErrorPayload,
                         sessionId: msgAny.session_id,
                         messageId: msgAny.message?.id,
                       },
@@ -1421,8 +1610,20 @@ ${prompt}
                   }
                 }
 
+                // Check abort before processing chunks
+                if (abortController.signal.aborted) {
+                  console.log(`[SD] M:ABORT_BEFORE_CHUNKS sub=${subId} n=${chunkCount}`)
+                  break
+                }
+
                 // Transform and emit + accumulate
                 for (const chunk of transform(msg)) {
+                  // Check abort signal frequently during chunk processing
+                  if (abortController.signal.aborted) {
+                    console.log(`[SD] M:ABORT_DURING_CHUNKS sub=${subId} type=${chunk.type} n=${chunkCount}`)
+                    break
+                  }
+                  
                   chunkCount++
                   lastChunkType = chunk.type
 
@@ -1526,6 +1727,12 @@ ${prompt}
                     console.log(`[SD] M:PLAN_BREAK_CHUNK sub=${subId}`)
                     break
                   }
+                  
+                  // Break from chunk loop if aborted
+                  if (abortController.signal.aborted) {
+                    console.log(`[SD] M:ABORT_IN_CHUNK_LOOP sub=${subId}`)
+                    break
+                  }
                 }
                 // Break from stream loop if plan is done
                 if (planCompleted) {
@@ -1535,6 +1742,11 @@ ${prompt}
                 // Break from stream loop if observer closed (user clicked Stop)
                 if (!isObservableActive) {
                   console.log(`[SD] M:OBSERVER_CLOSED_STREAM sub=${subId}`)
+                  break
+                }
+                // Break from stream loop if aborted (double-check)
+                if (abortController.signal.aborted) {
+                  console.log(`[SD] M:ABORT_AFTER_CHUNKS sub=${subId}`)
                   break
                 }
               }

@@ -44,6 +44,8 @@ export interface DesktopApi {
   windowToggleFullscreen: () => Promise<void>
   windowIsFullscreen: () => Promise<boolean>
   setTrafficLightVisibility: (visible: boolean) => Promise<void>
+  setWindowFramePreference: (useNativeFrame: boolean) => Promise<boolean>
+  getWindowFrameState: () => Promise<boolean>
   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => () => void
   onFocusChange: (callback: (isFocused: boolean) => void) => () => void
 

@@ -1,0 +1,375 @@
+diff --git src/main/windows/main.ts src/main/windows/main.ts
+index fb82236..dda0dd4 100644
+--- src/main/windows/main.ts
++++ src/main/windows/main.ts
+@@ -6,8 +6,10 @@ import {
+   app,
+   clipboard,
+   session,
++  Menu,
+ } from "electron"
+ import { join } from "path"
++import { readFileSync, existsSync } from "fs"
+ import { createIPCHandler } from "trpc-electron/main"
+ import { createAppRouter } from "../lib/trpc/routers"
+ import { getAuthManager, handleAuthCode, getBaseUrl } from "../index"
+@@ -21,6 +23,42 @@ function registerIpcHandlers(getWindow: () => BrowserWindow | null): void {
+ 
+   // App info
+   ipcMain.handle("app:version", () => app.getVersion())
++  
++  // Window frame preference
++  ipcMain.handle("window:set-frame-preference", (_event, useNativeFrame: boolean) => {
++    try {
++      const { writeFileSync, mkdirSync } = require("fs")
++      const settingsPath = join(app.getPath("userData"), "window-settings.json")
++      const settingsDir = app.getPath("userData")
++      // Ensure directory exists
++      mkdirSync(settingsDir, { recursive: true })
++      // Write preference
++      writeFileSync(settingsPath, JSON.stringify({ useNativeFrame }, null, 2))
++      console.log("[Main] Window frame preference saved:", useNativeFrame)
++      return true
++    } catch (error) {
++      console.error("[Main] Failed to save frame preference:", error)
++      return false
++    }
++  })
++  
++  // Get current window frame state (for renderer to check)
++  // This reads the actual preference that was used when the window was created
++  ipcMain.handle("window:get-frame-state", () => {
++    if (process.platform !== "win32") return false
++    // Read from settings file to see what frame type was used at window creation
++    try {
++      const settingsPath = join(app.getPath("userData"), "window-settings.json")
++      if (existsSync(settingsPath)) {
++        const settings = JSON.parse(readFileSync(settingsPath, "utf-8"))
++        return settings.useNativeFrame === true
++      }
++      return false // Default: frameless
++    } catch (error) {
++      console.warn("[Main] Failed to read frame state:", error)
++      return false // Default: frameless
++    }
++  })
+   // Note: Update checking is now handled by auto-updater module (lib/auto-updater.ts)
+   ipcMain.handle("app:set-badge", (_event, count: number | null) => {
+     if (process.platform === "darwin") {
+@@ -225,6 +263,38 @@ export function getWindow(): BrowserWindow | null {
+   return currentWindow
+ }
+ 
++/**
++ * Read window frame preference from settings file
++ * Returns true if native frame should be used, false for frameless
++ */
++function getUseNativeFramePreference(): boolean {
++  if (process.platform !== "win32") return false
++  
++  try {
++    // Read preference from a simple JSON file in userData
++    const settingsPath = join(app.getPath("userData"), "window-settings.json")
++    console.log("[Main] Checking frame preference at:", settingsPath)
++    
++    if (existsSync(settingsPath)) {
++      const fileContent = readFileSync(settingsPath, "utf-8")
++      console.log("[Main] Settings file content:", fileContent)
++      const settings = JSON.parse(fileContent)
++      const useNative = settings.useNativeFrame === true
++      console.log("[Main] Frame preference from file:", useNative, "parsed settings:", settings)
++      return useNative
++    }
++    
++    // Default: frameless (dark title bar)
++    // Note: If user has set preference in UI but file doesn't exist yet,
++    // it will be synced on next app launch after renderer loads
++    console.log("[Main] No settings file found, using default: frameless")
++    return false
++  } catch (error) {
++    console.error("[Main] Failed to read frame preference:", error)
++    return false // Default: frameless
++  }
++}
++
+ /**
+  * Create the main application window
+  */
+@@ -232,6 +302,9 @@ export function createMainWindow(): BrowserWindow {
+   // Register IPC handlers before creating window
+   registerIpcHandlers(getWindow)
+ 
++  // Read frame preference from settings file
++  const useNativeFrame = getUseNativeFramePreference()
++
+   const window = new BrowserWindow({
+     width: 1400,
+     height: 900,
+@@ -246,10 +319,11 @@ export function createMainWindow(): BrowserWindow {
+     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+     trafficLightPosition:
+       process.platform === "darwin" ? { x: 15, y: 12 } : undefined,
+-    // Windows: Use frameless window to hide native title bar completely
++    // Windows: Use native frame or frameless based on user preference
++    // Preference is stored in localStorage and applied on next app launch
+     ...(process.platform === "win32" && {
+-      frame: false, // Remove native title bar
+-      autoHideMenuBar: true, // Hide menu bar (user can press Alt to show)
++      frame: useNativeFrame ? true : false, // Use native frame if preference is true
++      autoHideMenuBar: useNativeFrame ? true : false, // Show menu bar with ALT if native frame
+     }),
+     webPreferences: {
+       preload: join(__dirname, "../preload/index.js"),
+@@ -395,5 +469,16 @@ export function createMainWindow(): BrowserWindow {
+     },
+   )
+ 
++  // Windows: Configure menu bar based on frame type
++  if (process.platform === "win32") {
++    if (useNativeFrame) {
++      // Native frame: menu bar accessible with ALT key
++      window.setAutoHideMenuBar(true)
++    } else {
++      // Frameless: menu bar won't work with ALT, but shortcuts still work
++      window.setAutoHideMenuBar(true)
++    }
++  }
++
+   return window
+ }
+diff --git src/preload/index.d.ts src/preload/index.d.ts
+index 51a06b4..ecd1893 100644
+--- src/preload/index.d.ts
++++ src/preload/index.d.ts
+@@ -44,6 +44,8 @@ export interface DesktopApi {
+   windowToggleFullscreen: () => Promise<void>
+   windowIsFullscreen: () => Promise<boolean>
+   setTrafficLightVisibility: (visible: boolean) => Promise<void>
++  setWindowFramePreference: (useNativeFrame: boolean) => Promise<boolean>
++  getWindowFrameState: () => Promise<boolean>
+   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => () => void
+   onFocusChange: (callback: (isFocused: boolean) => void) => () => void
+ 
+diff --git src/preload/index.ts src/preload/index.ts
+index ec8ee8d..233eed4 100644
+--- src/preload/index.ts
++++ src/preload/index.ts
+@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld("desktopApi", {
+   windowIsFullscreen: () => ipcRenderer.invoke("window:is-fullscreen"),
+   setTrafficLightVisibility: (visible: boolean) =>
+     ipcRenderer.invoke("window:set-traffic-light-visibility", visible),
++  setWindowFramePreference: (useNativeFrame: boolean) =>
++    ipcRenderer.invoke("window:set-frame-preference", useNativeFrame),
++  getWindowFrameState: () => ipcRenderer.invoke("window:get-frame-state"),
+ 
+   // Window events
+   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
+@@ -222,6 +225,7 @@ export interface DesktopApi {
+   onShortcutNewAgent: (callback: () => void) => () => void
+   // File changes
+   onFileChanged: (callback: (data: { filePath: string; type: string; subChatId: string }) => void) => () => void
++  // Main process logs
+ }
+ 
+ declare global {
+diff --git src/renderer/App.tsx src/renderer/App.tsx
+index 775e835..db36842 100644
+--- src/renderer/App.tsx
++++ src/renderer/App.tsx
+@@ -87,6 +87,21 @@ export function App() {
+     }
+     syncOptOutStatus()
+ 
++    // Sync window frame preference from localStorage to settings file
++    // This ensures the main process knows the preference even if settings file doesn't exist yet
++    const syncFramePreference = async () => {
++      try {
++        const useNativeFrame =
++          localStorage.getItem("preferences:windows-use-native-frame") === "true"
++        if (window.desktopApi?.setWindowFramePreference) {
++          await window.desktopApi.setWindowFramePreference(useNativeFrame)
++        }
++      } catch (error) {
++        console.warn("[App] Failed to sync frame preference:", error)
++      }
++    }
++    syncFramePreference()
++
+     // Identify user if already authenticated
+     const identifyUser = async () => {
+       try {
+diff --git src/renderer/components/dialogs/settings-tabs/agents-preferences-tab.tsx src/renderer/components/dialogs/settings-tabs/agents-preferences-tab.tsx
+index 916cfcc..8282742 100644
+--- src/renderer/components/dialogs/settings-tabs/agents-preferences-tab.tsx
++++ src/renderer/components/dialogs/settings-tabs/agents-preferences-tab.tsx
+@@ -5,6 +5,7 @@ import {
+   soundNotificationsEnabledAtom,
+   analyticsOptOutAtom,
+   ctrlTabTargetAtom,
++  useNativeFrameAtom,
+   type CtrlTabTarget,
+ } from "../../../lib/atoms"
+ import { Switch } from "../../ui/switch"
+@@ -40,7 +41,11 @@ export function AgentsPreferencesTab() {
+   const [soundEnabled, setSoundEnabled] = useAtom(soundNotificationsEnabledAtom)
+   const [analyticsOptOut, setAnalyticsOptOut] = useAtom(analyticsOptOutAtom)
+   const [ctrlTabTarget, setCtrlTabTarget] = useAtom(ctrlTabTargetAtom)
++  const [useNativeFrame, setUseNativeFrame] = useAtom(useNativeFrameAtom)
+   const isNarrowScreen = useIsNarrowScreen()
++  
++  // Check if we're on Windows
++  const isWindows = typeof window !== "undefined" && window.desktopApi?.platform === "win32"
+ 
+   // Sync opt-out status to main process
+   const handleAnalyticsToggle = async (optedOut: boolean) => {
+@@ -53,6 +58,24 @@ export function AgentsPreferencesTab() {
+     }
+   }
+ 
++  // Handle window frame toggle
++  const handleFrameToggle = (enabled: boolean) => {
++    try {
++      // Update atom first (synchronous, updates localStorage)
++      setUseNativeFrame(enabled)
++      
++      // Save preference to main process (non-blocking, fire and forget)
++      // Don't await - just fire and forget to avoid blocking
++      if (window.desktopApi?.setWindowFramePreference) {
++        window.desktopApi.setWindowFramePreference(enabled).catch((error) => {
++          console.error("Failed to save frame preference:", error)
++        })
++      }
++    } catch (error) {
++      console.error("Error in handleFrameToggle:", error)
++    }
++  }
++
+   return (
+     <div className="p-6 space-y-6">
+       {/* Header - hidden on narrow screens since it's in the navigation bar */}
+@@ -130,6 +153,41 @@ export function AgentsPreferencesTab() {
+         </div>
+       </div>
+ 
++      {/* Windows Window Frame Section - Only show on Windows */}
++      {isWindows && (
++        <div className="bg-background rounded-lg border border-border overflow-hidden">
++          <div className="p-4 space-y-4">
++            {/* Warning Banner */}
++            <div className="bg-amber-500/10 border border-amber-500/20 rounded-md p-3">
++              <div className="flex items-start gap-2">
++                <span className="text-amber-500 text-sm font-medium">⚠️ Restart Required</span>
++              </div>
++              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
++                Changing this setting requires restarting the app to take effect.
++              </p>
++            </div>
++            
++            {/* Native Frame Toggle */}
++            <div className="flex items-start justify-between">
++              <div className="flex flex-col space-y-1">
++                <span className="text-sm font-medium text-foreground">
++                  Native Window Frame
++                </span>
++                <span className="text-xs text-muted-foreground">
++                  {useNativeFrame
++                    ? "Uses native Windows title bar. Menu bar accessible with ALT key."
++                    : "Uses custom dark title bar. Menu shortcuts still work (Ctrl+N, etc.)."}
++                </span>
++              </div>
++              <Switch
++                checked={useNativeFrame}
++                onCheckedChange={handleFrameToggle}
++              />
++            </div>
++          </div>
++        </div>
++      )}
++
+       {/* Privacy Section */}
+       <div className="space-y-2">
+         <div className="pb-2">
+diff --git src/renderer/components/windows-title-bar.tsx src/renderer/components/windows-title-bar.tsx
+index e671750..f13c994 100644
+--- src/renderer/components/windows-title-bar.tsx
++++ src/renderer/components/windows-title-bar.tsx
+@@ -8,19 +8,42 @@ import { Button } from "./ui/button"
+ /**
+  * Windows title bar component for frameless windows
+  * Provides window controls (minimize, maximize, close) and drag region
++ * 
++ * NOTE: This component is only used when frame: false (frameless window).
++ * With native frame, the menu bar works with ALT key, so this component is hidden.
++ * 
++ * IMPORTANT: This component checks the actual window frame state, not the preference.
++ * The preference only applies after restart, so we check the real window state.
+  */
+ export function WindowsTitleBar() {
+   const [isMaximized, setIsMaximized] = useState(false)
++  const [hasNativeFrame, setHasNativeFrame] = useState(false)
+ 
+   // Check if we're on Windows desktop
+   const isWindows = typeof window !== "undefined" && window.desktopApi?.platform === "win32"
+ 
+-  // Only render on Windows
+-  if (!isWindows) return null
++  // Check actual window frame state (not preference - preference only applies after restart)
++  useEffect(() => {
++    if (!isWindows || !window.desktopApi?.getWindowFrameState) return
++    
++    const checkFrameState = async () => {
++      try {
++        const hasFrame = await window.desktopApi.getWindowFrameState()
++        setHasNativeFrame(hasFrame)
++      } catch (error) {
++        console.warn("[WindowsTitleBar] Failed to check frame state:", error)
++        // Default to showing title bar if we can't check
++        setHasNativeFrame(false)
++      }
++    }
++    
++    checkFrameState()
++  }, [isWindows])
+ 
+   // Check window state on mount and when it changes
++  // NOTE: This must be called before any early returns to follow React hooks rules
+   useEffect(() => {
+-    if (!window.desktopApi?.windowIsMaximized) return
++    if (!isWindows || !window.desktopApi?.windowIsMaximized) return
+ 
+     const checkMaximized = async () => {
+       const maximized = await window.desktopApi.windowIsMaximized()
+@@ -37,7 +60,11 @@ export function WindowsTitleBar() {
+ 
+     window.addEventListener("focus", handleFocus)
+     return () => window.removeEventListener("focus", handleFocus)
+-  }, [])
++  }, [isWindows])
++
++  // Early returns after all hooks are called
++  if (!isWindows) return null
++  if (hasNativeFrame) return null // Native frame has its own title bar
+ 
+   const handleMinimize = async () => {
+     await window.desktopApi?.windowMinimize()
+diff --git src/renderer/lib/atoms/index.ts src/renderer/lib/atoms/index.ts
+index 86f3091..b7e3aca 100644
+--- src/renderer/lib/atoms/index.ts
++++ src/renderer/lib/atoms/index.ts
+@@ -206,6 +206,16 @@ export const ctrlTabTargetAtom = atomWithStorage<CtrlTabTarget>(
+   { getOnInit: true },
+ )
+ 
++// Preferences - Windows Window Frame Style
++// When true, uses native frame (white title bar, ALT menu works)
++// When false, uses frameless window (dark custom title bar, no ALT menu)
++export const useNativeFrameAtom = atomWithStorage<boolean>(
++  "preferences:windows-use-native-frame",
++  false, // Default: frameless (dark title bar)
++  undefined,
++  { getOnInit: true },
++)
++
+ // Preferences - VS Code Code Themes
+ // Selected themes for code syntax highlighting (separate for light/dark UI themes)
+ export const vscodeCodeThemeLightAtom = atomWithStorage<string>(

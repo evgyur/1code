@@ -13,16 +13,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 bun run dev              # Start Electron with hot reload
 
 # Build
-bun run build            # Compile app
-bun run package          # Package for current platform (dir)
+bun run build            # Compile app (TypeScript → JavaScript, bundles React)
+bun run package          # Package for current platform (dir) - CREATES EXECUTABLE
 bun run package:mac      # Build macOS (DMG + ZIP)
 bun run package:win      # Build Windows (NSIS + portable)
-bun run package:linux    # Build Linux (AppImage + DEB)
+bun run package:linux     # Build Linux (AppImage + DEB)
 
 # Database (Drizzle + SQLite)
 bun run db:generate      # Generate migrations from schema
 bun run db:push          # Push schema directly (dev only)
 ```
+
+**IMPORTANT: After making code changes, you MUST run BOTH commands to get a new executable:**
+1. `bun run build` - Compiles source code to `out/` directory
+2. `bun run package` - Creates the executable (`1Code.exe` on Windows) in `release/win-unpacked/`
+
+**The executable timestamp only updates after running `package`.** Running only `build` compiles the code but doesn't create a new executable.
 
 ## Architecture
 
@@ -177,11 +183,13 @@ bun run dev
 bun run release
 
 # Or step by step:
-bun run build              # Compile TypeScript
-bun run package:mac        # Build & sign macOS app
+bun run build              # Compile TypeScript (creates out/ directory)
+bun run package:mac        # Build, sign & notarize macOS app (creates executable)
 bun run dist:manifest      # Generate latest-mac.yml manifests
 ./scripts/upload-release-wrangler.sh  # Submit notarization & upload to R2 CDN
 ```
+
+**Note:** Always run both `build` and `package` commands. `build` compiles source code, `package` creates the executable.
 
 ### Bump Version Before Release
 

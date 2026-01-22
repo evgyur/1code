@@ -117,8 +117,22 @@ export async function initAutoUpdater(getWindow: () => BrowserWindow | null) {
 
   // Event: Error
   autoUpdater.on("error", (error: Error) => {
-    log.error("[AutoUpdater] Error:", error.message)
-    sendToRenderer("update:error", error.message)
+    // Check if this is a 404 error (update manifest not found)
+    // This is normal for local builds or when updates aren't published yet
+    const is404Error = error.message.includes("404") || 
+                       error.message.includes("latest.yml") ||
+                       error.message.includes("Cannot find channel")
+    
+    if (is404Error) {
+      log.info("[AutoUpdater] Update manifest not found (404) - this is normal for local builds")
+      // Treat 404 as "no update available" rather than an error
+      sendToRenderer("update:not-available", {
+        version: app.getVersion(),
+      })
+    } else {
+      log.error("[AutoUpdater] Error:", error.message)
+      sendToRenderer("update:error", error.message)
+    }
   })
 
   // Register IPC handlers

@@ -39,6 +39,12 @@ import { atom, useAtom, useAtomValue, useSetAtom } from "jotai"
 import {
   ArrowDown,
   ChevronDown,
+  ChevronUp,
+  Columns2,
+  Eye,
+  GitBranch,
+  GitCommitHorizontal,
+  GitMerge,
   ListTree,
   TerminalSquare
 } from "lucide-react"
@@ -120,7 +126,7 @@ import { PreviewSetupHoverCard } from "../components/preview-setup-hover-card"
 import { TextSelectionProvider } from "../context/text-selection-context"
 import { useAgentsFileUpload } from "../hooks/use-agents-file-upload"
 import { useChangedFilesTracking } from "../hooks/use-changed-files-tracking"
-import { useDesktopNotifications } from "../hooks/use-desktop-notifications"
+import { useDesktopNotifications } from "../../sidebar/hooks/use-desktop-notifications"
 import { useFocusInputOnEnter } from "../hooks/use-focus-input-on-enter"
 import { useHaptic } from "../hooks/use-haptic"
 import { useTextContextSelection } from "../hooks/use-text-context-selection"
@@ -1806,6 +1812,8 @@ const ChatViewInner = memo(function ChatViewInner({
   isSubChatsSidebarOpen = false,
   sandboxId,
   projectPath,
+  originalProjectPath,
+  storedBranch,
   isArchived = false,
   onRestoreWorkspace,
   existingPrUrl,
@@ -1828,6 +1836,8 @@ const ChatViewInner = memo(function ChatViewInner({
   isSubChatsSidebarOpen?: boolean
   sandboxId?: string
   projectPath?: string
+  originalProjectPath?: string
+  storedBranch?: string
   isArchived?: boolean
   onRestoreWorkspace?: () => void
   existingPrUrl?: string | null
@@ -3738,14 +3748,25 @@ const ChatViewInner = memo(function ChatViewInner({
             isSubChatsSidebarOpen ? "pt-[52px]" : "pt-2",
           )}
         >
-          <ChatTitleEditor
-            name={subChatName}
-            placeholder="New Chat"
-            onSave={handleRenameSubChat}
-            isMobile={false}
-            chatId={subChatId}
-            hasMessages={messages.length > 0}
-          />
+          <div className="px-2 max-w-2xl mx-auto flex items-center justify-between w-full">
+            <div className="flex-1 min-w-0">
+              <ChatTitleEditor
+                name={subChatName}
+                placeholder="New Chat"
+                onSave={handleRenameSubChat}
+                isMobile={false}
+                chatId={subChatId}
+                hasMessages={messages.length > 0}
+              />
+            </div>
+            {/* Current branch display - show branch from worktree (what user is actually working on) */}
+            {projectPath && (
+              <BranchDisplay 
+                worktreePath={projectPath} 
+                storedBranch={storedBranch}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -4086,6 +4107,7 @@ export function ChatView({
       if (prev.has(chatId)) {
         const next = new Set(prev)
         next.delete(chatId)
+        console.log("[Badge] Clearing unseen for chat:", chatId, "remaining unseen:", Array.from(next))
         return next
       }
       return prev
@@ -4778,26 +4800,16 @@ Make sure to preserve all functionality from both branches when resolving confli
     })
     const dbSubChatIds = new Set(dbSubChats.map((sc) => sc.id))
 
-    // Start with DB sub-chats
+    // Start with DB sub-chats only (avoid placeholder tabs that don't exist in DB)
     const allSubChats: SubChatMeta[] = [...dbSubChats]
-
-    // For each open tab ID that's NOT in DB, add placeholder (like Canvas)
-    // This prevents losing tabs during race conditions
-    const currentOpenIds = freshState.openSubChatIds
-    currentOpenIds.forEach((id) => {
-      if (!dbSubChatIds.has(id)) {
-        allSubChats.push({
-          id,
-          name: "New Chat",
-          created_at: new Date().toISOString(),
-        })
-      }
-    })
-
     freshState.setAllSubChats(allSubChats)
 
-    // All open tabs are now valid (we created placeholders for non-DB ones)
-    const validOpenIds = currentOpenIds
+    // Filter out open tabs that no longer exist in DB
+    const currentOpenIds = freshState.openSubChatIds
+    const validOpenIds = currentOpenIds.filter((id) => dbSubChatIds.has(id))
+    if (validOpenIds.length !== currentOpenIds.length) {
+      freshState.setOpenSubChats(validOpenIds)
+    }
 
     if (validOpenIds.length === 0 && allSubChats.length > 0) {
       // No valid open tabs, open the first sub-chat
@@ -4893,28 +4905,34 @@ Make sure to preserve all functionality from both branches when resolving confli
 
           // Also mark parent chat as unseen if user is not viewing it
           if (!isViewingThisChat) {
+            console.log("[Badge] Marking chat as unseen:", chatId, "isViewingThisChat:", isViewingThisChat)
             setUnseenChanges((prev: Set<string>) => {
               const next = new Set(prev)
               next.add(chatId)
+              console.log("[Badge] Updated unseenChanges, new size:", next.size, "chats:", Array.from(next))
               return next
             })
+          } else {
+            console.log("[Badge] Not marking as unseen - user is viewing this chat:", chatId)
+          }
 
-            // Play completion sound only if NOT manually aborted and sound is enabled
-            if (!wasManuallyAborted) {
-              const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
-              if (isSoundEnabled) {
-                try {
-                  const audio = new Audio("./sound.mp3")
-                  audio.volume = 1.0
-                  audio.play().catch(() => {})
-                } catch {
-                  // Ignore audio errors
-                }
+          // Play completion sound and show notification if NOT manually aborted
+          // Show notification even if viewing chat - user might be in another app
+          if (!wasManuallyAborted) {
+            const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
+            if (isSoundEnabled && !isViewingThisChat) {
+              // Sound only plays when not viewing chat
+              try {
+                const audio = new Audio("./sound.mp3")
+                audio.volume = 1.0
+                audio.play().catch(() => {})
+              } catch {
+                // Ignore audio errors
               }
-
-              // Show native notification (desktop app, when window not focused)
-              notifyAgentComplete(agentChat?.name || "Agent")
             }
+
+            // Show native notification (always, if enabled in settings)
+            notifyAgentComplete(agentChat?.name || "Agent")
           }
 
           // Refresh diff stats after agent finishes making changes
@@ -5047,28 +5065,34 @@ Make sure to preserve all functionality from both branches when resolving confli
 
           // Also mark parent chat as unseen if user is not viewing it
           if (!isViewingThisChat) {
+            console.log("[Badge] Marking chat as unseen:", chatId, "isViewingThisChat:", isViewingThisChat)
             setUnseenChanges((prev: Set<string>) => {
               const next = new Set(prev)
               next.add(chatId)
+              console.log("[Badge] Updated unseenChanges, new size:", next.size, "chats:", Array.from(next))
               return next
             })
+          } else {
+            console.log("[Badge] Not marking as unseen - user is viewing this chat:", chatId)
+          }
 
-            // Play completion sound only if NOT manually aborted and sound is enabled
-            if (!wasManuallyAborted) {
-              const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
-              if (isSoundEnabled) {
-                try {
-                  const audio = new Audio("./sound.mp3")
-                  audio.volume = 1.0
-                  audio.play().catch(() => {})
-                } catch {
-                  // Ignore audio errors
-                }
+          // Play completion sound and show notification if NOT manually aborted
+          // Show notification even if viewing chat - user might be in another app
+          if (!wasManuallyAborted) {
+            const isSoundEnabled = appStore.get(soundNotificationsEnabledAtom)
+            if (isSoundEnabled && !isViewingThisChat) {
+              // Sound only plays when not viewing chat
+              try {
+                const audio = new Audio("./sound.mp3")
+                audio.volume = 1.0
+                audio.play().catch(() => {})
+              } catch {
+                // Ignore audio errors
               }
-
-              // Show native notification (desktop app, when window not focused)
-              notifyAgentComplete(agentChat?.name || "Agent")
             }
+
+            // Show native notification (always, if enabled in settings)
+            notifyAgentComplete(agentChat?.name || "Agent")
           }
 
           // Refresh diff stats after agent finishes making changes
@@ -5917,6 +5941,74 @@ Make sure to preserve all functionality from both branches when resolving confli
           />
         )}
       </div>
+    </div>
+  )
+}
+
+// Branch display component - shows current git branch in chat
+function BranchDisplay({ 
+  worktreePath, 
+  storedBranch
+}: { 
+  worktreePath: string
+  storedBranch?: string
+}) {
+  // Query branch from worktree (what user is actually working on)
+  const hasValidPath = !!worktreePath && typeof worktreePath === "string" && worktreePath.trim().length > 0
+  
+  const { data: currentBranch, isLoading, error } = trpc.changes.getCurrentBranch.useQuery(
+    { worktreePath: worktreePath || "" },
+    {
+      enabled: hasValidPath,
+      refetchInterval: 5000, // Refetch every 5 seconds to catch branch changes
+      retry: 1, // Only retry once on error
+    }
+  )
+
+  // Use live branch from git query, fallback to stored branch from database
+  const displayBranch = currentBranch || storedBranch
+
+  // Debug logging to help troubleshoot
+  useEffect(() => {
+    if (worktreePath) {
+      console.log("[BranchDisplay] State:", {
+        worktreePath,
+        storedBranch,
+        currentBranch,
+        displayBranch,
+        isLoading,
+        error: error?.message,
+      })
+    }
+  }, [worktreePath, storedBranch, currentBranch, displayBranch, isLoading, error])
+
+  // Show loading state only if we don't have a stored branch
+  if (isLoading && !storedBranch) {
+    return (
+      <div className="flex items-center gap-1.5 mt-1.5 px-1 opacity-50">
+        <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0 animate-pulse" />
+        <span className="text-xs text-muted-foreground font-mono">loading...</span>
+      </div>
+    )
+  }
+
+  // Show error state (but still show stored branch if available)
+  if (error && !storedBranch) {
+    console.warn("[BranchDisplay] Error:", error.message, "Path:", worktreePath)
+    return null
+  }
+
+  // Don't show if no branch at all
+  if (!displayBranch) {
+    return null
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1.5 px-1 opacity-80 hover:opacity-100 transition-opacity">
+      <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <span className="text-xs text-muted-foreground font-mono select-all">
+        {displayBranch}
+      </span>
     </div>
   )
 }

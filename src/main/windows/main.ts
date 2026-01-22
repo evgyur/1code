@@ -369,8 +369,21 @@ export function createMainWindow(): BrowserWindow {
 
   // Setup tRPC IPC handler (singleton pattern)
   if (ipcHandler) {
-    // Reuse existing handler, just attach new window
-    ipcHandler.attachWindow(window)
+    // Check if window is already attached to avoid duplicates
+    // In dev mode with hot reload, the same window might be attached multiple times
+    try {
+      ipcHandler.attachWindow(window)
+    } catch (error) {
+      // If attach fails (e.g., window already attached), recreate handler
+      console.warn("[Main] Failed to attach window to existing handler, recreating:", error)
+      ipcHandler = createIPCHandler({
+        router: createAppRouter(getWindow),
+        windows: [window],
+        createContext: async () => ({
+          getWindow,
+        }),
+      })
+    }
   } else {
     // Create new handler with context
     ipcHandler = createIPCHandler({

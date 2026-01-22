@@ -1,8 +1,19 @@
-// Only initialize Sentry in production to avoid IPC errors in dev mode
-if (import.meta.env.PROD) {
-  import("@sentry/electron/renderer").then((Sentry) => {
-    Sentry.init()
-  })
+// Only initialize Sentry in production if DSN is configured
+// This prevents IPC errors when Sentry is not properly set up
+if (import.meta.env.PROD && import.meta.env.VITE_SENTRY_DSN) {
+  import("@sentry/electron/renderer")
+    .then((Sentry) => {
+      try {
+        Sentry.init({
+          dsn: import.meta.env.VITE_SENTRY_DSN,
+        })
+      } catch (error) {
+        console.warn("[Renderer] Failed to initialize Sentry:", error)
+      }
+    })
+    .catch((error) => {
+      console.warn("[Renderer] Failed to load Sentry:", error)
+    })
 }
 
 import ReactDOM from "react-dom/client"

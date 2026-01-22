@@ -106,11 +106,25 @@ export function useUpdateChecker() {
     // Error during update
     unsubs.push(
       api.onUpdateError?.((error) => {
-        console.error("[Update] Error:", error)
-        setState({
-          status: "error",
-          error,
-        })
+        // Check if this is a 404 error (update manifest not found)
+        // This is normal for local builds or when updates aren't published yet
+        const is404Error = typeof error === "string" && (
+          error.includes("404") ||
+          error.includes("latest.yml") ||
+          error.includes("Cannot find channel")
+        )
+        
+        if (is404Error) {
+          // Treat 404 as "no update available" rather than an error
+          console.log("[Update] Update manifest not found (404) - this is normal for local builds")
+          setState({ status: "idle" })
+        } else {
+          console.error("[Update] Error:", error)
+          setState({
+            status: "error",
+            error,
+          })
+        }
       }),
     )
 
