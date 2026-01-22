@@ -1,0 +1,42 @@
+name: release-portable
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-portable:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+        env:
+          VERCEL: "1"
+
+      - name: Download Claude binary
+        run: npm run claude:download
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package portable
+        run: npm run package:win:portable
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.exe

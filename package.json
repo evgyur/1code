@@ -15,6 +15,7 @@
     "package": "node scripts/package-windows.mjs",
     "package:mac": "electron-builder --mac",
     "package:win": "electron-builder --win",
+    "package:win:portable": "node scripts/package-windows-portable.mjs",
     "package:linux": "electron-builder --linux",
     "dist": "electron-builder",
     "dist:manifest": "node scripts/generate-update-manifest.mjs",
