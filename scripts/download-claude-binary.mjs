@@ -65,14 +65,14 @@ function downloadFile(url, destPath) {
         .get(url, (res) => {
           if (res.statusCode === 301 || res.statusCode === 302) {
             file.close()
-            fs.unlinkSync(destPath)
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
             return request(res.headers.location)
           }
 
           if (res.statusCode === 404) {
             file.close()
             if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
-            return reject(new Error(`HTTP 404: Binary not found for version ${version} on platform ${platform.dir}. This version may not be available for Windows.`))
+            return reject(new Error(`HTTP 404: Binary not found. This version may not be available for this platform.`))
           }
           if (res.statusCode !== 200) {
             file.close()
@@ -103,13 +103,13 @@ function downloadFile(url, destPath) {
 
           res.on("error", (err) => {
             file.close()
-            fs.unlinkSync(destPath)
+            if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
             reject(err)
           })
         })
         .on("error", (err) => {
           file.close()
-          fs.unlinkSync(destPath)
+          if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
           reject(err)
         })
     }
@@ -132,29 +132,25 @@ function calculateSha256(filePath) {
 }
 
 /**
- * Get latest version from manifest
+ * Get latest version from GCS bucket
  */
 async function getLatestVersion() {
-  // Try to fetch version list or use known latest
-  // For now, we'll fetch the manifest for a known version
   console.log("Fetching latest Claude Code version...")
 
   try {
-    // The install script endpoint returns version info
-    const response = await fetch("https://claude.ai/install.sh")
-    const script = await response.text()
-    const versionMatch = script.match(/CLAUDE_CODE_VERSION="([^"]+)"/)
-    if (versionMatch) {
-      return versionMatch[1]
+    // Fetch from the same endpoint that install.sh uses
+    const response = await fetch("https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest")
+    if (response.ok) {
+      const version = await response.text()
+      return version.trim()
     }
-  } catch {
-    // Fallback
+  } catch (error) {
+    console.warn(`Failed to fetch latest version: ${error.message}`)
   }
 
-  // Fallback to known working version with Windows support
-  // Try 2.1.8 first (latest with Windows support), then 2.0.61
-  console.warn("Could not fetch latest version, trying fallback: 2.1.8")
-  return "2.1.8"
+  // Fallback to known version with Windows support (should be updated periodically)
+  console.warn("Could not fetch latest version, using fallback: 2.1.17")
+  return "2.1.17"
 }
 
 /**
@@ -181,21 +177,11 @@ async function downloadPlatform(version, platformKey, manifest) {
   }
 
   const expectedHash = platformManifest.checksum
-  // For Windows, the URL needs to use 'claude.exe', not 'claude'
-  // For other platforms, it's just 'claude'
-  const binaryUrlName = platformKey === "win32-x64" ? "claude.exe" : "claude"
-  const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/${binaryUrlName}`
+  const downloadUrl = `${DIST_BASE}/${version}/${platform.dir}/${platform.binary}`
 
   console.log(`\nDownloading Claude Code for ${platformKey}...`)
   console.log(`  URL: ${downloadUrl}`)
   console.log(`  Size: ${(platformManifest.size / 1024 / 1024).toFixed(1)} MB`)
-  
-  // Check if platform is available in manifest
-  if (!platformManifest) {
-    console.error(`  ✗ Platform ${platform.dir} not available for version ${version}`)
-    console.error(`  Available platforms: ${Object.keys(manifest.platforms || {}).join(", ")}`)
-    return false
-  }
 
   // Check if already downloaded with correct hash
   if (fs.existsSync(targetPath)) {

@@ -8,6 +8,7 @@ import { Button as ButtonCustom } from "../../components/ui/button"
 import { cn } from "../../lib/utils"
 import { useSetAtom, useAtom, useAtomValue } from "jotai"
 import {
+  autoAdvanceTargetAtom,
   createTeamDialogOpenAtom,
   agentsSettingsDialogActiveTabAtom,
   agentsSettingsDialogOpenAtom,
@@ -22,9 +23,10 @@ import {
   isFullscreenAtom,
   showOfflineModeFeaturesAtom,
   showWorkspaceIconAtom,
+  betaKanbanEnabledAtom,
 } from "../../lib/atoms"
 import { ArchivePopover } from "../agents/ui/archive-popover"
-import { ChevronDown, MoreHorizontal } from "lucide-react"
+import { ChevronDown, MoreHorizontal, Columns3 } from "lucide-react"
 // import { useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // import { useCombinedAuth } from "@/lib/hooks/use-combined-auth"
 const useCombinedAuth = () => ({ userId: null })
@@ -59,6 +61,9 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
 } from "../../components/ui/context-menu"
 import {
   IconDoubleChevronLeft,
@@ -83,6 +88,7 @@ import {
   selectedAgentChatIdAtom,
   previousAgentChatIdAtom,
   selectedDraftIdAtom,
+  showNewChatFormAtom,
   loadingSubChatsAtom,
   agentsUnseenChangesAtom,
   archivePopoverOpenAtom,
@@ -97,6 +103,7 @@ import { NetworkStatus } from "../../components/ui/network-status"
 import { useAgentSubChatStore, OPEN_SUB_CHATS_CHANGE_EVENT } from "../agents/stores/sub-chat-store"
 import { AgentsHelpPopover } from "../agents/components/agents-help-popover"
 import { getShortcutKey, isDesktopApp } from "../../lib/utils/platform"
+import { useResolvedHotkeyDisplay } from "../../lib/hotkeys"
 import { pluralize } from "../agents/utils/pluralize"
 import { useNewChatDrafts, deleteNewChatDraft, type NewChatDraft } from "../agents/lib/drafts"
 import {
@@ -107,10 +114,46 @@ import { useHotkeys } from "react-hotkeys-hook"
 import { Checkbox } from "../../components/ui/checkbox"
 import { useHaptic } from "./hooks/use-haptic"
 import { TypewriterText } from "../../components/ui/typewriter-text"
+import { exportChat, copyChat, type ExportFormat } from "../agents/lib/export-chat"
 
 // Feedback URL: uses env variable for hosted version, falls back to public Discord for open source
 const FEEDBACK_URL =
   import.meta.env.VITE_FEEDBACK_URL || "https://discord.gg/8ektTZGnj4"
+
+// GitHub avatar with loading placeholder
+const GitHubAvatar = React.memo(function GitHubAvatar({
+  gitOwner,
+  className = "h-4 w-4",
+}: {
+  gitOwner: string
+  className?: string
+}) {
+  const [isLoaded, setIsLoaded] = useState(false)
+  const [hasError, setHasError] = useState(false)
+
+  const handleLoad = useCallback(() => setIsLoaded(true), [])
+  const handleError = useCallback(() => setHasError(true), [])
+
+  if (hasError) {
+    return <GitHubLogo className={cn(className, "text-muted-foreground flex-shrink-0")} />
+  }
+
+  return (
+    <div className={cn(className, "relative flex-shrink-0")}>
+      {/* Placeholder background while loading */}
+      {!isLoaded && (
+        <div className="absolute inset-0 rounded-sm bg-muted" />
+      )}
+      <img
+        src={`https://github.com/${gitOwner}.png?size=64`}
+        alt={gitOwner}
+        className={cn(className, "rounded-sm flex-shrink-0", isLoaded ? 'opacity-100' : 'opacity-0')}
+        onLoad={handleLoad}
+        onError={handleError}
+      />
+    </div>
+  )
+})
 
 // Component to render chat icon with loading status
 const ChatIcon = React.memo(function ChatIcon({
@@ -141,13 +184,7 @@ const ChatIcon = React.memo(function ChatIcon({
   // Show GitHub avatar if available, otherwise blank project icon
   const renderMainIcon = () => {
     if (gitOwner && gitProvider === "github") {
-      return (
-        <img
-          src={`https://github.com/${gitOwner}.png?size=64`}
-          alt={gitOwner}
-          className="h-4 w-4 rounded-sm flex-shrink-0"
-        />
-      )
+      return <GitHubAvatar gitOwner={gitOwner} />
     }
     return (
       <GitHubLogo
@@ -310,11 +347,7 @@ const DraftItem = React.memo(function DraftItem({
           <div className="pt-0.5">
             <div className="relative flex-shrink-0 w-4 h-4">
               {projectGitOwner && projectGitProvider === "github" ? (
-                <img
-                  src={`https://github.com/${projectGitOwner}.png?size=64`}
-                  alt={projectGitOwner}
-                  className="h-4 w-4 rounded-sm flex-shrink-0"
-                />
+                <GitHubAvatar gitOwner={projectGitOwner} />
               ) : (
                 <GitHubLogo className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
               )}
@@ -455,6 +488,9 @@ const AgentChatItem = React.memo(function AgentChatItem({
   formatTime: (dateStr: string) => string
   isJustCreated: boolean
 }) {
+  // Resolved hotkey for context menu
+  const archiveWorkspaceHotkey = useResolvedHotkeyDisplay("archive-workspace")
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -661,10 +697,39 @@ const AgentChatItem = React.memo(function AgentChatItem({
                 Copy branch name
               </ContextMenuItem>
             )}
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>Export workspace</ContextMenuSubTrigger>
+              <ContextMenuSubContent sideOffset={6} alignOffset={-4}>
+                <ContextMenuItem onClick={() => exportChat({ chatId, format: "markdown" })}>
+                  Download as Markdown
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => exportChat({ chatId, format: "json" })}>
+                  Download as JSON
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => exportChat({ chatId, format: "text" })}>
+                  Download as Text
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => copyChat({ chatId, format: "markdown" })}>
+                  Copy as Markdown
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => copyChat({ chatId, format: "json" })}>
+                  Copy as JSON
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => copyChat({ chatId, format: "text" })}>
+                  Copy as Text
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            {isDesktop && (
+              <ContextMenuItem onClick={() => window.desktopApi?.newWindow({ chatId })}>
+                Open in new window
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onArchive(chatId)} className="justify-between">
               Archive workspace
-              <Kbd>{getShortcutKey("archiveAgent")}</Kbd>
+              {archiveWorkspaceHotkey && <Kbd>{archiveWorkspaceHotkey}</Kbd>}
             </ContextMenuItem>
             <ContextMenuItem
               onClick={() => onArchiveAllBelow(chatId)}
@@ -938,6 +1003,45 @@ const ArchiveButton = memo(forwardRef<HTMLButtonElement, React.ButtonHTMLAttribu
   }
 ))
 
+// Isolated Kanban Button - clears selection to show Kanban view
+const KanbanButton = memo(function KanbanButton() {
+  const kanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
+  const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
+  const setSelectedDraftId = useSetAtom(selectedDraftIdAtom)
+  const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
+
+  // Resolved hotkey for tooltip (respects custom bindings)
+  const openKanbanHotkey = useResolvedHotkeyDisplay("open-kanban")
+
+  const handleClick = useCallback(() => {
+    // Clear selected chat, draft, and new form state to show Kanban view
+    setSelectedChatId(null)
+    setSelectedDraftId(null)
+    setShowNewChatForm(false)
+  }, [setSelectedChatId, setSelectedDraftId, setShowNewChatForm])
+
+  // Hide button if feature is disabled
+  if (!kanbanEnabled) return null
+
+  return (
+    <Tooltip delayDuration={500}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={handleClick}
+          className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
+        >
+          <Columns3 className="h-4 w-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        Kanban View
+        {openKanbanHotkey && <Kbd>{openKanbanHotkey}</Kbd>}
+      </TooltipContent>
+    </Tooltip>
+  )
+})
+
 // Isolated Archive Section - subscribes to archivePopoverOpenAtom internally
 // to prevent sidebar re-renders when popover opens/closes
 interface ArchiveSectionProps {
@@ -1016,6 +1120,7 @@ const SidebarHeader = memo(function SidebarHeader({
 }: SidebarHeaderProps) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const showOfflineFeatures = useAtomValue(showOfflineModeFeaturesAtom)
+  const toggleSidebarHotkey = useResolvedHotkeyDisplay("toggle-sidebar")
 
   return (
     <div
@@ -1072,7 +1177,7 @@ const SidebarHeader = memo(function SidebarHeader({
             </TooltipTrigger>
             <TooltipContent>
               Close sidebar
-              <Kbd>⌘\</Kbd>
+              {toggleSidebarHotkey && <Kbd>{toggleSidebarHotkey}</Kbd>}
             </TooltipContent>
           </Tooltip>
         </div>
@@ -1378,7 +1483,9 @@ export function AgentsSidebar({
 }: AgentsSidebarProps) {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const previousChatId = useAtomValue(previousAgentChatIdAtom)
+  const autoAdvanceTarget = useAtomValue(autoAdvanceTargetAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
+  const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const pendingQuestions = useAtomValue(pendingUserQuestionsAtom)
   // Use ref instead of state to avoid re-renders on hover
@@ -1416,6 +1523,9 @@ export function AgentsSidebar({
 
   // Haptic feedback
   const { trigger: triggerHaptic } = useHaptic()
+
+  // Resolved hotkey for tooltip
+  const newWorkspaceHotkey = useResolvedHotkeyDisplay("new-workspace")
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
@@ -1563,19 +1673,42 @@ export function AgentsSidebar({
   // Archive chat mutation
   const archiveChatMutation = trpc.chats.archive.useMutation({
     onSuccess: (_, variables) => {
+      // Hide tooltip if visible (element may be removed from DOM before mouseLeave fires)
+      if (agentTooltipTimerRef.current) {
+        clearTimeout(agentTooltipTimerRef.current)
+        agentTooltipTimerRef.current = null
+      }
+      if (agentTooltipRef.current) {
+        agentTooltipRef.current.style.display = "none"
+      }
+
       utils.chats.list.invalidate()
       utils.chats.listArchived.invalidate()
 
-      // If archiving the currently selected chat, navigate to previous or new workspace
+      // If archiving the currently selected chat, navigate based on auto-advance setting
       if (selectedChatId === variables.id) {
-        // Check if previous chat is available (exists and not being archived)
-        const isPreviousAvailable = previousChatId &&
-          agentChats?.some((c) => c.id === previousChatId && c.id !== variables.id)
+        const currentIndex = agentChats?.findIndex((c) => c.id === variables.id) ?? -1
 
-        if (isPreviousAvailable) {
-          setSelectedChatId(previousChatId)
+        if (autoAdvanceTarget === "next") {
+          // Find next workspace in list (after current index)
+          const nextChat = agentChats?.find((c, i) => i > currentIndex && c.id !== variables.id)
+          if (nextChat) {
+            setSelectedChatId(nextChat.id)
+          } else {
+            // No next workspace, go to new workspace view
+            setSelectedChatId(null)
+          }
+        } else if (autoAdvanceTarget === "previous") {
+          // Go to previously selected workspace
+          const isPreviousAvailable = previousChatId &&
+            agentChats?.some((c) => c.id === previousChatId && c.id !== variables.id)
+          if (isPreviousAvailable) {
+            setSelectedChatId(previousChatId)
+          } else {
+            setSelectedChatId(null)
+          }
         } else {
-          // Fallback to new workspace view
+          // Close: go to new workspace view
           setSelectedChatId(null)
         }
       }
@@ -1626,6 +1759,15 @@ export function AgentsSidebar({
   // Batch archive mutation
   const archiveChatsBatchMutation = trpc.chats.archiveBatch.useMutation({
     onSuccess: (_, variables) => {
+      // Hide tooltip if visible (element may be removed from DOM before mouseLeave fires)
+      if (agentTooltipTimerRef.current) {
+        clearTimeout(agentTooltipTimerRef.current)
+        agentTooltipTimerRef.current = null
+      }
+      if (agentTooltipRef.current) {
+        agentTooltipRef.current.style.display = "none"
+      }
+
       utils.chats.list.invalidate()
       utils.chats.listArchived.invalidate()
 
@@ -1904,11 +2046,12 @@ export function AgentsSidebar({
       // Navigate to NewChatForm with this draft selected
       setSelectedChatId(null)
       setSelectedDraftId(draftId)
+      setShowNewChatForm(false) // Clear explicit new chat state when selecting a draft
       if (isMobileFullscreen && onChatSelect) {
         onChatSelect()
       }
     },
-    [setSelectedChatId, setSelectedDraftId, isMobileFullscreen, onChatSelect],
+    [setSelectedChatId, setSelectedDraftId, setShowNewChatForm, isMobileFullscreen, onChatSelect],
   )
 
   // Reset focused index when search query changes
@@ -1977,6 +2120,7 @@ export function AgentsSidebar({
     triggerHaptic("light")
     setSelectedChatId(null)
     setSelectedDraftId(null) // Clear selected draft so form starts empty
+    setShowNewChatForm(true) // Explicitly show new chat form
     // On mobile, switch to chat mode to show NewChatForm
     if (isMobileFullscreen && onChatSelect) {
       onChatSelect()
@@ -2043,11 +2187,12 @@ export function AgentsSidebar({
     // In multi-select mode, clicking on the item still navigates to the chat
     // Only clicking on the checkbox toggles selection
     setSelectedChatId(chatId)
+    setShowNewChatForm(false) // Clear new chat form state when selecting a workspace
     // On mobile, notify parent to switch to chat mode
     if (isMobileFullscreen && onChatSelect) {
       onChatSelect()
     }
-  }, [filteredChats, selectedChatId, selectedChatIds, toggleChatSelection, setSelectedChatIds, setSelectedChatId, isMobileFullscreen, onChatSelect])
+  }, [filteredChats, selectedChatId, selectedChatIds, toggleChatSelection, setSelectedChatIds, setSelectedChatId, setShowNewChatForm, isMobileFullscreen, onChatSelect])
 
   const handleCheckboxClick = useCallback((e: React.MouseEvent, chatId: string) => {
     e.stopPropagation()
@@ -2482,7 +2627,7 @@ export function AgentsSidebar({
             </TooltipTrigger>
             <TooltipContent side="right">
               Start a new workspace
-              <Kbd>{getShortcutKey("newAgent")}</Kbd>
+              {newWorkspaceHotkey && <Kbd>{newWorkspaceHotkey}</Kbd>}
             </TooltipContent>
           </Tooltip>
         </div>
@@ -2713,6 +2858,9 @@ export function AgentsSidebar({
 
                 {/* Help Button - isolated component to prevent sidebar re-renders */}
                 <HelpSection isMobile={isMobileFullscreen} />
+
+                {/* Kanban View Button - isolated component */}
+                <KanbanButton />
 
                 {/* Archive Button - isolated component to prevent sidebar re-renders */}
                 <ArchiveSection archivedChatsCount={archivedChatsCount} />

@@ -8,6 +8,8 @@ import {
   historyEnabledAtom,
   sessionInfoAtom,
   selectedOllamaModelAtom,
+  showOfflineModeFeaturesAtom,
+  autoOfflineModeAtom,
   type CustomClaudeConfig,
   normalizeCustomClaudeConfig,
 } from "../../../lib/atoms"
@@ -82,6 +84,11 @@ const ERROR_TOAST_CONFIG: Record<
     description:
       "The Claude process exited unexpectedly. Try sending your message again or rollback.",
   },
+  SESSION_EXPIRED: {
+    title: "Session expired",
+    description:
+      "Your previous chat session expired. Send your message again to start fresh.",
+  },
   EXECUTABLE_NOT_FOUND: {
     title: "Claude CLI not found",
     description:
@@ -101,6 +108,10 @@ const ERROR_TOAST_CONFIG: Record<
   AUTH_FAILURE: {
     title: "Authentication failed",
     description: "Your session may have expired. Try logging in again.",
+  },
+  USAGE_POLICY_VIOLATION: {
+    title: "Request declined",
+    description: "",
   },
   SDK_ERROR: {
     title: "Claude SDK error",
@@ -150,7 +161,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     // Read extended thinking setting dynamically (so toggle applies to existing chats)
     // Cap below 64k to avoid SDK limit errors on some models.
     const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
-    const maxThinkingTokens = thinkingEnabled ? 63_800 : undefined
+    // Max thinking tokens for extended thinking mode
+    // SDK adds +1 internally, so 64000 becomes 64001 which exceeds Opus 4.5 limit
+    // Using 32000 to stay safely under the 64000 max output tokens limit
+    const maxThinkingTokens = thinkingEnabled ? 32_000 : undefined
     const historyEnabled = appStore.get(historyEnabledAtom)
 
     // Read model selection dynamically (so model changes apply to existing chats)
@@ -164,7 +178,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     // Get selected Ollama model for offline mode
     const selectedOllamaModel = appStore.get(selectedOllamaModelAtom)
-    console.log(`[SD] selectedOllamaModel from atom: ${selectedOllamaModel || "(null)"}`)
+    // Check if offline mode is enabled in settings
+    const showOfflineFeatures = appStore.get(showOfflineModeFeaturesAtom)
+    const autoOfflineMode = appStore.get(autoOfflineModeAtom)
+    const offlineModeEnabled = showOfflineFeatures && autoOfflineMode
 
     const currentMode =
       useAgentSubChatStore
@@ -196,6 +213,7 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
             ...(customConfig && { customConfig }),
             ...(selectedOllamaModel && { selectedOllamaModel }),
             historyEnabled,
+            offlineModeEnabled,
             ...(images.length > 0 && { images }),
           },
           {
@@ -312,9 +330,20 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
               // Handle errors - show toast to user FIRST before anything else
               if (chunk.type === "error") {
                 const category = chunk.debugInfo?.category || "UNKNOWN"
-                console.log(
-                  `[SD] R:ERROR_CHUNK sub=${subId} n=${chunkCount} category=${category} isStreamClosed=${isStreamClosed} isStreamErrored=${isStreamErrored}`,
-                )
+
+                // Detailed SDK error logging for debugging
+                console.error(`[SDK ERROR] ========================================`)
+                console.error(`[SDK ERROR] Category: ${category}`)
+                console.error(`[SDK ERROR] Error text: ${chunk.errorText}`)
+                console.error(`[SDK ERROR] Chat ID: ${this.config.chatId}`)
+                console.error(`[SDK ERROR] SubChat ID: ${this.config.subChatId}`)
+                console.error(`[SDK ERROR] CWD: ${this.config.cwd}`)
+                console.error(`[SDK ERROR] Mode: ${currentMode}`)
+                if (chunk.debugInfo) {
+                  console.error(`[SDK ERROR] Debug info:`, JSON.stringify(chunk.debugInfo, null, 2))
+                }
+                console.error(`[SDK ERROR] Full chunk:`, JSON.stringify(chunk, null, 2))
+                console.error(`[SDK ERROR] ========================================`)
 
                 // Track error in Sentry
                 Sentry.captureException(
@@ -333,66 +362,39 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   },
                 )
 
+                // Build detailed error string for copying (available for ALL errors)
+                const errorDetails = [
+                  `Error: ${chunk.errorText || "Unknown error"}`,
+                  `Category: ${category}`,
+                  `Chat ID: ${this.config.chatId}`,
+                  `SubChat ID: ${this.config.subChatId}`,
+                  `CWD: ${this.config.cwd}`,
+                  `Mode: ${currentMode}`,
+                  `Timestamp: ${new Date().toISOString()}`,
+                  chunk.debugInfo ? `Debug Info: ${JSON.stringify(chunk.debugInfo, null, 2)}` : null,
+                ].filter(Boolean).join("\n")
+
                 // Show toast based on error category
                 const config = ERROR_TOAST_CONFIG[category]
+                const title = config?.title || "Claude error"
+                // Use config description if set, otherwise fall back to errorText
+                const rawDescription = config?.description || chunk.errorText || "An unexpected error occurred"
+                // Truncate long descriptions for toast (keep first 300 chars)
+                const description = rawDescription.length > 300
+                  ? rawDescription.slice(0, 300) + "..."
+                  : rawDescription
 
-                if (config) {
-                  const debugInfo = chunk.debugInfo || {}
-                  const sdkError = debugInfo?.sdkError
-                  const description =
-                    category === "SDK_ERROR" && sdkError
-                      ? `Claude SDK error: ${sdkError}`
-                      : config.description
-
-                  const action =
-                    category === "SDK_ERROR"
-                      ? {
-                          label: "Copy error",
-                          onClick: () => {
-                            navigator.clipboard.writeText(
-                              `Error: ${chunk.errorText || "Claude SDK error"}\nCategory: ${category}\nDebug: ${JSON.stringify(debugInfo, null, 2)}`,
-                            )
-                          },
-                        }
-                      : config.action
-
-                  toast.error(config.title, {
-                    description,
-                    duration: 8000,
-                    action,
-                  })
-                } else {
-                  const errorText =
-                    chunk.errorText || "An unexpected error occurred"
-                  const debugInfo = chunk.debugInfo || {}
-
-                  let title = "Something went wrong"
-                  let description = errorText
-
-                  if (
-                    category === "SDK_ERROR" &&
-                    debugInfo.sdkError === "unknown"
-                  ) {
-                    title = "Claude SDK error"
-                    description =
-                      "An unexpected error occurred. This might be a temporary issue. Try sending your message again."
-                  }
-
-                  toast.error(title, {
-                    description,
-                    duration: 10000,
-                    action: {
-                      label: "Copy error",
-                      onClick: () => {
-                        navigator.clipboard.writeText(
-                          `Error: ${errorText}\nCategory: ${category}\nDebug: ${JSON.stringify(debugInfo, null, 2)}`,
-                        )
-                      },
+                toast.error(title, {
+                  description,
+                  duration: 12000,
+                  action: {
+                    label: "Copy Error",
+                    onClick: () => {
+                      navigator.clipboard.writeText(errorDetails)
+                      toast.success("Error details copied to clipboard")
                     },
-                  })
-                }
-
-                // IMPORTANT: Always enqueue error chunks so SDK can handle them.
+                  },
+                })
               }
 
               // Try to enqueue, but don't crash if stream is already closed
@@ -556,10 +558,23 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
   private extractText(msg: UIMessage | undefined): string {
     if (!msg) return ""
     if (msg.parts) {
-      return msg.parts
-        .filter((p): p is { type: "text"; text: string } => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
+      const textParts: string[] = []
+      const fileContents: string[] = []
+
+      for (const p of msg.parts) {
+        const partType = (p as any).type as string
+        if (partType === "text" && (p as any).text) {
+          textParts.push((p as any).text)
+        } else if (partType === "file-content") {
+          // Hidden file content - add to prompt but not displayed in UI
+          const fc = p as any
+          const fileName = fc.filePath?.split("/").pop() || fc.filePath || "file"
+          fileContents.push(`\n--- ${fileName} ---\n${fc.content}`)
+        }
+      }
+
+      // Combine text and file contents
+      return textParts.join("\n") + fileContents.join("")
     }
     return ""
   }
