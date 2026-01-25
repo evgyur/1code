@@ -346,6 +346,33 @@ git diff --check
 
 ### Merge History
 
+#### v0.0.31 → v0.0.44 (2026-01-25)
+
+**Conflicts Resolved:**
+- `src/main/windows/main.ts`, `src/main/index.ts`, `src/main/windows/window-manager.ts` — accepted upstream (multi-window, getWindowFromEvent, createWindow, windowManager)
+- `scripts/download-claude-binary.mjs` — upstream as base; re-applied: 404 + `existsSync` before `unlinkSync`, non-200 and redirect/error handlers; `platform.binary` (claude.exe); fallback 2.1.17, Windows manifest check and 2.1.8
+- `src/main/lib/trpc/routers/claude.ts` — upstream as base; re-applied: CWD resolution (`path.resolve(os.homedir(), input.cwd)`), worktree fallback (`project.path` from DB)
+- `src/main/lib/claude/transform.ts` — upstream as base; token-usage already re-applied (usage, usage_info, modelUsage, fallbacks, inputTokens ?? 0, outputTokens ?? 0)
+- `src/main/lib/git/worktree.ts` — `homedir()` for `worktreesDir` (already in upstream/merged)
+- `package.json` — version 0.0.44; scripts: `package` → `package-windows.mjs`, `package:win:portable`, `release:portable`; `build.win` (npmRebuild: false, portable, sign: null)
+- `bun.lock` — accepted upstream
+- `src/renderer/features/agents/hooks/use-desktop-notifications.ts` — accepted upstream (was deleted by us)
+- `src/renderer/App.tsx`, `src/renderer/features/agents/ui/agents-header-controls.tsx` — accepted upstream (WindowProvider, useResolvedHotkeyDisplay, ThemeToggle removed)
+- `src/renderer/components/dialogs/settings-tabs/agents-preferences-tab.tsx` — merged: `useNativeFrameAtom` + `autoAdvanceTarget` (upstream)
+- `src/renderer/features/agents/lib/ipc-chat-transport.ts` — merged: `USAGE_POLICY_VIOLATION` + `SDK_ERROR`, `maxThinkingTokens` 32_000
+
+**Re-applied (our patches):**
+- CWD resolution + worktree fallback: `claude.ts`
+- Token usage (usage, usage_info, modelUsage, fallbacks): `transform.ts`
+- 404 handling and `existsSync` before `unlinkSync`: `download-claude-binary.mjs`
+
+**Ours kept (upstream does not have):**
+- `package` → `scripts/package-windows.mjs`, `package:win:portable`, `release:portable`
+- `build.win`: `npmRebuild: false`, `win.target: [portable]`, `sign: null`, `asarUnpack` (+ bindings)
+- `.github/workflows/build-windows.yml`, `release-portable.yml`
+
+**Upstream already includes:** Windows frame preference (`window:set-frame-preference`, `window:get-frame-state`, `getUseNativeFramePreference`), `claude.exe` in PLATFORMS, `app:isPackaged`.
+
 #### v0.0.22 → v0.0.24 (2026-01-XX)
 
 **Conflicts Resolved**:

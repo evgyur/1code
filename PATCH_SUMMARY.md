@@ -1,55 +1,50 @@
-# Claude Fixes Patch - Updated for v0.0.19
+# Claude Fixes Patch - Updated for v0.0.44
 
-## Status: ✅ Merged with upstream v0.0.19
+## Status: ✅ Merged with upstream v0.0.44 (2026-01-25)
 
-Successfully merged upstream changes while preserving all Claude fixes.
+Successfully merged upstream v0.0.44 while preserving our Windows and Claude fixes.
 
-## What Was Merged
+## v0.0.44 — Re-apply After Merge
 
-**Upstream v0.0.19 features (kept):**
-- Tool mentions support (`@[tool:name]`)
-- MCP servers integration from `~/.claude.json`
-- Other upstream improvements
+For **v0.0.44**, re-apply manually (patches may not apply cleanly):
 
-**Our fixes (preserved):**
-- ✅ CWD path resolution (relative → absolute)
-- ✅ Worktree fallback (uses project path if worktree missing)
-- ✅ Windows binary download (version 2.0.61, correct URL `claude.exe`)
-- ✅ Worktree creation (uses `os.homedir()` for Windows)
+1. **`src/main/lib/trpc/routers/claude.ts`** — CWD resolution (`path.resolve(os.homedir(), input.cwd)`) and worktree fallback (project.path from DB when `fs.stat(resolvedCwd)` fails).
+2. **`src/main/lib/claude/transform.ts`** — Token usage in `msg.type === "result"`: `usage`/`usage_info`, `modelUsage` (sum), fallbacks, `inputTokens ?? 0`, `outputTokens ?? 0`, `totalTokens`. See `token-usage-fix-complete.patch` or `token-usage-fix.patch`.
+3. **`scripts/download-claude-binary.mjs`** — 404: `if (fs.existsSync(destPath)) fs.unlinkSync(destPath)` before reject; same for non-200 and for redirect/stream error handlers.
 
-## Files Modified
+**Already in upstream (no re-apply):** Windows frame preference, `claude.exe` in PLATFORMS, `app:isPackaged`, `worktree.ts` homedir.
 
-1. `src/main/lib/trpc/routers/claude.ts` - CWD validation + worktree fallback
-2. `src/main/lib/git/worktree.ts` - Use `os.homedir()` instead of `process.env.HOME`
-3. `scripts/download-claude-binary.mjs` - Windows version 2.0.61 + `claude.exe` URL
-4. `.github/workflows/build-windows.yml` - Add binary download step
+## What Was Merged (v0.0.44)
 
-## Patch Files
+**Upstream v0.0.44 (kept):** multi-window (windowManager, createWindow, getWindowFromEvent), MCP OAuth, human-readable worktrees, slash-command fixes, voice, kanban, details-sidebar, and related refactors.
 
-- `claude-fixes-updated.patch` - Patch against upstream v0.0.19 (411 lines)
-- `claude-essential-fixes.patch` - Original patch (may not apply cleanly to v0.0.19)
-- `MANUAL_PATCH_GUIDE.md` - Step-by-step manual instructions
+**Our fixes (preserved or re-applied):**
+- ✅ CWD resolution + worktree fallback — `claude.ts`
+- ✅ Token usage (usage, usage_info, modelUsage, fallbacks) — `transform.ts`
+- ✅ 404 + `existsSync` before unlink — `download-claude-binary.mjs`
+- ✅ `worktree.ts` — `homedir()` for worktreesDir (in upstream)
+- ✅ `package` → `package-windows.mjs`, `package:win:portable`, `release:portable`, `build.win`, `build-windows.yml`, `release-portable.yml`
 
-## To Apply on Next Update
+## Files Modified (v0.0.44)
 
-```bash
-# After pulling latest upstream
-git fetch upstream
-git merge upstream/main
+1. `src/main/lib/trpc/routers/claude.ts` — CWD validation + worktree fallback (re-applied)
+2. `src/main/lib/claude/transform.ts` — Token usage (re-applied)
+3. `src/main/lib/git/worktree.ts` — `homedir()` (already in upstream)
+4. `scripts/download-claude-binary.mjs` — 404+existsSync, platform.binary, 2.1.17/2.1.8 (re-applied)
+5. `package.json` — our `package`, `package:win:portable`, `release:portable`, `build.win`
+6. `.github/workflows/build-windows.yml`, `release-portable.yml` — ours
 
-# Apply the updated patch
-git apply claude-fixes-updated.patch
+## Patch Files (reference)
 
-# Or follow MANUAL_PATCH_GUIDE.md for manual changes
-```
+- `token-usage-fix-complete.patch`, `token-usage-fix.patch` — for `transform.ts`
+- `claude-fixes-updated.patch`, `claude-essential-fixes.patch` — older; may not apply to v0.0.44
+- `MANUAL_PATCH_GUIDE.md` — manual steps
 
-## Verification
+## Verification (v0.0.44)
 
-All essential fixes verified:
-- CWD validation: ✅ Present
-- Worktree fallback: ✅ Present  
-- Windows binary version: ✅ 2.0.61
-- Windows binary URL: ✅ claude.exe
-- Worktree os.homedir: ✅ Present
-
-Build status: ✅ Successful
+- CWD + worktree fallback: ✅
+- Token usage (usage_info, modelUsage): ✅
+- Download 404+existsSync: ✅
+- worktree homedir: ✅
+- Frame preference, claude.exe: ✅ (upstream)
+- Build and package: ✅
