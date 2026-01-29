@@ -556,6 +556,52 @@ export const claudeRouter = router({
           try {
             const db = getDatabase()
 
+            // Resolve relative CWD paths to absolute (Windows fix)
+            let resolvedCwd = input.cwd
+            if (input.cwd && !path.isAbsolute(input.cwd)) {
+              const homeDir = os.homedir()
+              resolvedCwd = path.resolve(homeDir, input.cwd)
+              console.log(`[claude] Resolved relative CWD: ${input.cwd} → ${resolvedCwd}`)
+            }
+
+            // Get chat to find worktree path as fallback
+            const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+
+            // Fallback: if resolvedCwd doesn't exist, try worktreePath or projectPath
+            if (chat) {
+              const worktreePath = chat.worktreePath as string | null
+              const projectPath = chat.projectPath as string | null
+              
+              if (resolvedCwd) {
+                try {
+                  await fs.access(resolvedCwd)
+                } catch {
+                  if (worktreePath) {
+                    try {
+                      await fs.access(worktreePath)
+                      resolvedCwd = worktreePath
+                    } catch {
+                      if (projectPath) {
+                        try {
+                          await fs.access(projectPath)
+                          resolvedCwd = projectPath
+                        } catch {}
+                      }
+                    }
+                  } else if (projectPath) {
+                    try {
+                      await fs.access(projectPath)
+                      resolvedCwd = projectPath
+                    } catch {}
+                  }
+                }
+              } else if (worktreePath) {
+                resolvedCwd = worktreePath
+              } else if (projectPath) {
+                resolvedCwd = projectPath
+              }
+            }
+
             // 1. Get existing messages from DB
             const existing = db
               .select()
@@ -670,7 +716,7 @@ export const claudeRouter = router({
             const { cleanedPrompt, agentMentions, skillMentions } = parseMentions(input.prompt)
 
             // Build agents option for SDK (proper registration via options.agents)
-            const agentsOption = await buildAgentsOption(agentMentions, input.cwd)
+            const agentsOption = await buildAgentsOption(agentMentions, resolvedCwd)
 
             // Log if agents were mentioned
             if (agentMentions.length > 0) {
@@ -818,7 +864,7 @@ export const claudeRouter = router({
                 if (stats) {
                   const currentMtime = stats.mtimeMs
                   const cached = mcpConfigCache.get(claudeJsonSource)
-                  const lookupPath = input.projectPath || input.cwd
+                  const lookupPath = input.projectPath || resolvedCwd
 
                   // Get or refresh cached config
                   let claudeConfig: any
@@ -889,11 +935,11 @@ export const claudeRouter = router({
             const resumeSessionId = input.sessionId || existingSessionId || undefined
 
             // DEBUG: Session resume path tracing
-            const expectedSanitizedCwd = input.cwd.replace(/[/.]/g, "-")
+            const expectedSanitizedCwd = resolvedCwd.replace(/[/.]/g, "-")
             const expectedSessionPath = path.join(isolatedConfigDir, "projects", expectedSanitizedCwd, `${resumeSessionId}.jsonl`)
             console.log(`[claude] ========== SESSION DEBUG ==========`)
             console.log(`[claude] subChatId: ${input.subChatId}`)
-            console.log(`[claude] cwd: ${input.cwd}`)
+            console.log(`[claude] cwd: ${input.cwd} (resolved: ${resolvedCwd})`)
             console.log(`[claude] sanitized cwd (expected): ${expectedSanitizedCwd}`)
             console.log(`[claude] CLAUDE_CONFIG_DIR: ${isolatedConfigDir}`)
             console.log(`[claude] Expected session path: ${expectedSessionPath}`)
@@ -902,7 +948,7 @@ export const claudeRouter = router({
             console.log(`[claude] Resume at UUID: ${resumeAtUuid}`)
             console.log(`[claude] ========== END SESSION DEBUG ==========`)
 
-            console.log(`[SD] Query options - cwd: ${input.cwd}, projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`)
+            console.log(`[SD] Query options - cwd: ${input.cwd} (resolved: ${resolvedCwd}), projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`)
             if (finalCustomConfig) {
               const redactedConfig = {
                 ...finalCustomConfig,
@@ -954,7 +1000,7 @@ export const claudeRouter = router({
             } else {
               // Ensure MCP tokens are fresh (refresh if within 5 min of expiry)
               if (mcpServersForSdk && Object.keys(mcpServersForSdk).length > 0) {
-                const lookupPath = input.projectPath || input.cwd
+                const lookupPath = input.projectPath || resolvedCwd
                 mcpServersFiltered = await ensureMcpTokensFresh(mcpServersForSdk, lookupPath)
               } else {
                 mcpServersFiltered = mcpServersForSdk
@@ -966,7 +1012,7 @@ export const claudeRouter = router({
               console.log('[Ollama Debug] SDK Configuration:', {
                 model: resolvedModel,
                 baseUrl: finalEnv.ANTHROPIC_BASE_URL,
-                cwd: input.cwd,
+                cwd: resolvedCwd,
                 configDir: isolatedConfigDir,
                 hasAuthToken: !!finalEnv.ANTHROPIC_AUTH_TOKEN,
                 tokenPreview: finalEnv.ANTHROPIC_AUTH_TOKEN?.slice(0, 10) + '...',
@@ -1064,8 +1110,8 @@ ${history}
 
               const ollamaContext = `[CONTEXT]
 You are a coding assistant in OFFLINE mode (Ollama model: ${resolvedModel || 'unknown'}).
-Project: ${input.projectPath || input.cwd}
-Working directory: ${input.cwd}
+Project: ${input.projectPath || resolvedCwd}
+Working directory: ${resolvedCwd}
 
 IMPORTANT: When using tools, use these EXACT parameter names:
 - Read: use "file_path" (not "file")
@@ -1096,7 +1142,7 @@ ${prompt}
               prompt: finalQueryPrompt,
               options: {
                 abortController, // Must be inside options!
-                cwd: input.cwd,
+                cwd: resolvedCwd,
                 systemPrompt: systemPromptConfig,
                 // Register mentioned agents with SDK via options.agents (skip for Ollama - not supported)
                 ...(!isUsingOllama && Object.keys(agentsOption).length > 0 && { agents: agentsOption }),
@@ -1744,7 +1790,7 @@ ${prompt}
                     },
                     extra: {
                       context: errorContext,
-                      cwd: input.cwd,
+                      cwd: resolvedCwd,
                       stderr: stderrOutput || "(no stderr captured)",
                       chatId: input.chatId,
                       subChatId: input.subChatId,
@@ -1765,7 +1811,7 @@ ${prompt}
                   debugInfo: {
                     context: errorContext,
                     category: errorCategory,
-                    cwd: input.cwd,
+                    cwd: resolvedCwd,
                     mode: input.mode,
                     stderr: stderrOutput || "(no stderr captured)",
                   },
@@ -1800,8 +1846,8 @@ ${prompt}
                   .run()
 
                 // Create snapshot stash for rollback support (on error)
-                if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
-                  await createRollbackStash(input.cwd, metadata.sdkMessageUuid)
+                if (historyEnabled && metadata.sdkMessageUuid && resolvedCwd) {
+                  await createRollbackStash(resolvedCwd, metadata.sdkMessageUuid)
                 }
               }
 
@@ -1870,8 +1916,8 @@ ${prompt}
               .run()
 
             // Create snapshot stash for rollback support
-            if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
-              await createRollbackStash(input.cwd, metadata.sdkMessageUuid)
+            if (historyEnabled && metadata.sdkMessageUuid && resolvedCwd) {
+              await createRollbackStash(resolvedCwd, metadata.sdkMessageUuid)
             }
 
             const duration = ((Date.now() - streamStart) / 1000).toFixed(1)

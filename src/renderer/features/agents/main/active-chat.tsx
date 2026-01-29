@@ -4652,12 +4652,12 @@ export function ChatView({
   const chatSourceMode = useAtomValue(chatSourceModeAtom)
 
   // Fetch chat data from local or remote based on mode
-  const { data: localAgentChat, isLoading: isLocalLoading } = api.agents.getAgentChat.useQuery(
+  const { data: localAgentChat, isLoading: isLocalLoading, error: localError } = api.agents.getAgentChat.useQuery(
     { chatId },
     { enabled: !!chatId && chatSourceMode === "local" },
   )
 
-  const { data: remoteAgentChat, isLoading: isRemoteLoading } = useRemoteChat(
+  const { data: remoteAgentChat, isLoading: isRemoteLoading, error: remoteError } = useRemoteChat(
     chatSourceMode === "sandbox" ? chatId : null,
   )
 
@@ -4696,6 +4696,7 @@ export function ChatView({
   }, [chatSourceMode, remoteAgentChat, localAgentChat])
 
   const isLoading = chatSourceMode === "sandbox" ? isRemoteLoading : isLocalLoading
+  const error = chatSourceMode === "sandbox" ? remoteError : localError
 
   // Compute if we're waiting for local chat data (used as loading gate)
   const isLocalChatLoading = chatSourceMode === "local" && isLocalLoading
@@ -6495,7 +6496,26 @@ Make sure to preserve all functionality from both branches when resolving confli
           )}
 
           {/* Chat Content - Keep-alive: render all open tabs, hide inactive with CSS */}
-          {tabsToRender.length > 0 && agentChat ? (
+          {error ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-muted-foreground max-w-md px-4">
+                <p className="text-sm font-medium mb-2">Failed to load chat</p>
+                <p className="text-xs opacity-70">
+                  {error instanceof Error ? error.message : String(error)}
+                </p>
+              </div>
+            </div>
+          ) : isLoading || isLocalChatLoading ? (
+            <div className="flex-1 flex items-center justify-center">
+              <IconSpinner className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : !agentChat ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-muted-foreground">
+                <p className="text-sm">Chat not found</p>
+              </div>
+            </div>
+          ) : tabsToRender.length > 0 ? (
             <div className="relative flex-1 min-h-0">
               {/* Loading gate: prevent getOrCreateChat() from caching empty messages before data is ready */}
               {isLocalChatLoading ? (

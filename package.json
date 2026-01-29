@@ -133,7 +133,7 @@
   "build": {
     "appId": "dev.21st.agents",
     "productName": "1Code",
-    "npmRebuild": true,
+    "npmRebuild": false,
     "protocols": [
       {
         "name": "1Code",

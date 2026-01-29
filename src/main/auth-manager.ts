@@ -206,20 +206,32 @@ export class AuthManager {
   /**
    * Start auth flow by opening browser
    */
-  startAuthFlow(mainWindow: BrowserWindow | null): void {
+  async startAuthFlow(mainWindow: BrowserWindow | null): Promise<void> {
     const { shell } = require("electron")
 
     let authUrl = `${this.getApiUrl()}/auth/desktop?auto=true`
 
-    // In dev mode, use localhost callback (we run HTTP server on AUTH_SERVER_PORT)
-    // Also pass the protocol so web knows which deep link to use as fallback
     if (this.isDev) {
       authUrl += `&callback=${encodeURIComponent(`http://localhost:${AUTH_SERVER_PORT}/auth/callback`)}`
-      // Pass dev protocol so production web can use correct deep link if callback fails
       authUrl += `&protocol=twentyfirst-agents-dev`
     }
 
-    shell.openExternal(authUrl)
+    console.log("[Auth] Starting auth flow with URL:", authUrl)
+
+    try {
+      new URL(authUrl)  // Validate URL
+    } catch (urlError) {
+      throw new Error(`Invalid auth URL format: ${authUrl}`)
+    }
+
+    try {
+      await shell.openExternal(authUrl)
+      console.log("[Auth] Browser opened successfully")
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error("[Auth] Failed to open browser:", errorMessage)
+      throw new Error(`Failed to open browser: ${errorMessage}`)
+    }
   }
 
   /**

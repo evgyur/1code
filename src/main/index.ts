@@ -33,6 +33,7 @@ import {
   createWindow,
   getWindow,
   getAllWindows,
+  registerIpcHandlersEarly,
 } from "./windows/main"
 import { windowManager } from "./windows/window-manager"
 
@@ -282,7 +283,13 @@ const FAVICON_DATA_URI = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`
 
 // Start local HTTP server for auth callbacks
 // This catches http://localhost:{AUTH_SERVER_PORT}/auth/callback?code=xxx and /callback (for MCP OAuth)
-const server = createServer((req, res) => {
+// Auth server retry logic for port conflicts
+let retryCount = 0
+const MAX_RETRIES = 1
+const RETRY_DELAY_MS = 2000
+
+function createAuthServer() {
+  return createServer((req, res) => {
     const url = new URL(req.url || "", `http://localhost:${AUTH_SERVER_PORT}`)
 
     // Serve favicon
@@ -461,10 +468,36 @@ const server = createServer((req, res) => {
       res.end("Not found")
     }
   })
+}
 
-server.listen(AUTH_SERVER_PORT, () => {
-  console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
-})
+function startAuthServer(): void {
+  const server = createAuthServer()
+  
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") {
+      retryCount++
+      if (retryCount <= MAX_RETRIES) {
+        console.warn(`[Auth Server] Port ${AUTH_SERVER_PORT} is in use. Retrying...`)
+        server.close()
+        setTimeout(() => startAuthServer(), RETRY_DELAY_MS)
+        return
+      }
+      // Show error dialog and quit
+      const { dialog } = require("electron")
+      dialog.showErrorBox("Port Conflict", `Port ${AUTH_SERVER_PORT} is already in use.`)
+      app.quit()
+    }
+  })
+  
+  server.on("listening", () => {
+    console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
+    retryCount = 0
+  })
+  
+  server.listen(AUTH_SERVER_PORT)
+}
+
+startAuthServer()
 
 // Clean up stale lock files from crashed instances
 // Returns true if locks were cleaned, false otherwise
@@ -852,8 +885,22 @@ if (gotTheLock) {
       console.error("[App] Failed to initialize database:", error)
     }
 
+    // Register IPC handlers early (before window creation)
+    try {
+      registerIpcHandlersEarly()
+      console.log("[App] IPC handlers registered")
+    } catch (error) {
+      console.error("[App] Failed to register IPC handlers:", error)
+    }
+
     // Create main window
-    createMainWindow()
+    try {
+      createMainWindow()
+      console.log("[App] Main window created")
+    } catch (error) {
+      console.error("[App] Failed to create main window:", error)
+      throw error
+    }
 
     // Initialize auto-updater (production only)
     if (app.isPackaged) {
