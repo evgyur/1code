@@ -12,6 +12,7 @@ import {
   widgetVisibilityAtomFamily,
   unifiedSidebarEnabledAtom,
 } from "../../details-sidebar/atoms"
+import { chatSourceModeAtom } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { X, Plus, AlignJustify, Play, TerminalSquare } from "lucide-react"
 import {
@@ -175,6 +176,7 @@ interface SubChatSelectorProps {
   diffStats?: DiffStats
   onOpenTerminal?: () => void
   canOpenTerminal?: boolean
+  isTerminalOpen?: boolean
   chatId?: string
 }
 
@@ -190,6 +192,7 @@ export function SubChatSelector({
   diffStats,
   onOpenTerminal,
   canOpenTerminal = false,
+  isTerminalOpen = false,
   chatId,
 }: SubChatSelectorProps) {
   // Use shallow comparison to prevent re-renders when arrays have same content
@@ -213,6 +216,7 @@ export function SubChatSelector({
 
   // Overview sidebar state - to check if widgets are visible
   const isUnifiedSidebarEnabled = useAtomValue(unifiedSidebarEnabledAtom)
+  const chatSourceMode = useAtomValue(chatSourceModeAtom)
   const widgetVisibilityAtom = useMemo(
     () => widgetVisibilityAtomFamily(chatId || ""),
     [chatId],
@@ -221,8 +225,9 @@ export function SubChatSelector({
 
   // Show standalone buttons when:
   // 1. Unified sidebar is disabled (use legacy sidebars), OR
-  // 2. Unified sidebar is enabled but the widget is hidden by user
-  const showDiffButton = !isUnifiedSidebarEnabled || !widgetVisibility.includes("diff")
+  // 2. Unified sidebar is enabled but the widget is hidden by user, OR
+  // 3. Sandbox mode (DetailsSidebar doesn't render without worktreePath)
+  const showDiffButton = !isUnifiedSidebarEnabled || !widgetVisibility.includes("diff") || chatSourceMode === "sandbox"
   const showTerminalButton = !isUnifiedSidebarEnabled || !widgetVisibility.includes("terminal")
 
   // Resolved hotkeys for tooltips
@@ -648,7 +653,7 @@ export function SubChatSelector({
             "flex items-center px-1 py-1 -my-1 gap-1 flex-1 min-w-0 overflow-x-auto scrollbar-hide pr-12",
             // Hide tabs when sidebar is open (desktop) or when only one chat exists
             (subChatsSidebarMode === "sidebar" && !isMobile) && "hidden",
-            hasSingleChat && "hidden",
+            hasSingleChat && "invisible",
           )}
         >
           {hasNoChats
@@ -899,7 +904,8 @@ export function SubChatSelector({
       )}
 
       {/* Diff button - visible on desktop when unified sidebar is disabled OR diff widget is hidden */}
-      {!isMobile && canOpenDiff && showDiffButton && (
+      {/* Only show if onOpenDiff is provided (clickable action available) */}
+      {!isMobile && canOpenDiff && showDiffButton && onOpenDiff && (
         <div
           className="rounded-md bg-background/10 backdrop-blur-[10px] flex items-center justify-center"
           style={{
@@ -915,32 +921,20 @@ export function SubChatSelector({
                 onClick={() => onOpenDiff?.()}
                 className="h-6 w-6 p-0 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] flex-shrink-0 rounded-md flex items-center justify-center hover:bg-foreground/10"
               >
-                {diffStats?.isLoading ? (
-                  <IconSpinner className="h-4 w-4" />
-                ) : (
-                  <DiffIcon className="h-4 w-4" />
-                )}
+                <DiffIcon className="h-4 w-4" />
                 <span className="sr-only">Open diff</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {diffStats?.isLoading ? (
-                "Loading changes..."
-              ) : diffStats?.hasChanges ? (
-                <>
-                  <span>View changes</span>
-                  {openDiffHotkey && <Kbd>{openDiffHotkey}</Kbd>}
-                </>
-              ) : (
-                "No changes"
-              )}
+              <span>View changes</span>
+              {openDiffHotkey && <Kbd>{openDiffHotkey}</Kbd>}
             </TooltipContent>
           </Tooltip>
         </div>
       )}
 
-      {/* Terminal button - visible on desktop when unified sidebar is disabled OR terminal widget is hidden */}
-      {!isMobile && canOpenTerminal && showTerminalButton && (
+      {/* Terminal button - visible on desktop when unified sidebar is disabled OR terminal widget is hidden, and terminal is not already open */}
+      {!isMobile && canOpenTerminal && showTerminalButton && !isTerminalOpen && (
         <div
           className="rounded-md bg-background/10 backdrop-blur-[10px] flex items-center justify-center"
           style={{

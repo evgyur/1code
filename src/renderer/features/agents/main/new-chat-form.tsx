@@ -31,7 +31,6 @@ import {
 import { cn } from "../../../lib/utils"
 import {
   agentsDebugModeAtom,
-  isPlanModeAtom,
   justCreatedIdsAtom,
   lastSelectedAgentIdAtom,
   lastSelectedBranchesAtom,
@@ -39,9 +38,13 @@ import {
   lastSelectedRepoAtom,
   lastSelectedWorkModeAtom,
   selectedAgentChatIdAtom,
+  selectedChatIsRemoteAtom,
   selectedDraftIdAtom,
   selectedProjectAtom,
+  getNextMode,
+  type AgentMode,
 } from "../atoms"
+import { defaultAgentModeAtom } from "../../../lib/atoms"
 import { ProjectSelector } from "../components/project-selector"
 import { WorkModeSelector } from "../components/work-mode-selector"
 // import { selectedTeamIdAtom } from "@/lib/atoms/team"
@@ -55,6 +58,7 @@ import {
   showOfflineModeFeaturesAtom,
   selectedOllamaModelAtom,
   customHotkeysAtom,
+  chatSourceModeAtom,
 } from "../../../lib/atoms"
 // Desktop uses real tRPC
 import { toast } from "sonner"
@@ -82,6 +86,7 @@ import {
   type AgentsMentionsEditorHandle,
   type FileMentionOption,
 } from "../mentions"
+import { AgentFileItem } from "../ui/agent-file-item"
 import { AgentImageItem } from "../ui/agent-image-item"
 import { AgentPastedTextItem } from "../ui/agent-pasted-text-item"
 import { AgentsHeaderControls } from "../ui/agents-header-controls"
@@ -174,6 +179,8 @@ export function NewChatForm({
   const [hasContent, setHasContent] = useState(false)
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const setSelectedChatIsRemote = useSetAtom(selectedChatIsRemoteAtom)
+  const setChatSourceMode = useSetAtom(chatSourceModeAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
 
@@ -214,7 +221,14 @@ export function NewChatForm({
   const [lastSelectedModelId, setLastSelectedModelId] = useAtom(
     lastSelectedModelIdAtom,
   )
-  const [isPlanMode, setIsPlanMode] = useAtom(isPlanModeAtom)
+  // Mode for new chat - uses user's default preference directly
+  // Note: defaultAgentMode is initialized synchronously via atomWithStorage with getOnInit: true
+  const defaultAgentMode = useAtomValue(defaultAgentModeAtom)
+  const [agentMode, setAgentMode] = useState<AgentMode>(() => defaultAgentMode)
+  // Toggle mode helper
+  const toggleMode = useCallback(() => {
+    setAgentMode(getNextMode)
+  }, [])
   const [workMode, setWorkMode] = useAtom(lastSelectedWorkModeAtom)
   const debugMode = useAtomValue(agentsDebugModeAtom)
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
@@ -279,8 +293,16 @@ export function NewChatForm({
 
   const [selectedModel, setSelectedModel] = useState(
     () =>
-      availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[1],
+      availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[0],
   )
+
+  // Sync selectedModel when atom value changes (e.g., after localStorage hydration)
+  useEffect(() => {
+    const model = availableModels.models.find((m) => m.id === lastSelectedModelId)
+    if (model && model.id !== selectedModel.id) {
+      setSelectedModel(model)
+    }
+  }, [lastSelectedModelId])
 
   // Determine current Ollama model (selected or recommended)
   const currentOllamaModel = selectedOllamaModel || availableModels.recommendedModel || availableModels.ollamaModels[0]
@@ -328,12 +350,15 @@ export function NewChatForm({
     }
   }, [validatedProject?.id, lastSelectedBranches])
 
-  // Image upload hook
+  // File upload hook
   const {
     images,
+    files,
     handleAddAttachments,
     removeImage,
+    removeFile,
     clearImages,
+    clearFiles,
     isUploading,
   } = useAgentsFileUpload()
 
@@ -862,14 +887,18 @@ export function NewChatForm({
   const utils = trpc.useUtils()
   const createChatMutation = trpc.chats.create.useMutation({
     onSuccess: (data) => {
-      // Clear editor, images, pasted texts, and file contents cache only on success
+      // Clear editor, images, files, pasted texts, and file contents cache only on success
       editorRef.current?.clear()
       clearImages()
+      clearFiles()
       clearPastedTexts()
       fileContentsRef.current.clear()
       clearCurrentDraft()
       utils.chats.list.invalidate()
       setSelectedChatId(data.id)
+      // New chats are always local
+      setSelectedChatIsRemote(false)
+      setChatSourceMode("local")
       // Track this chat and its first subchat as just created for typewriter effect
       const ids = [data.id]
       if (data.subChats?.[0]?.id) {
@@ -942,12 +971,13 @@ export function NewChatForm({
     // Get value from uncontrolled editor
     let message = editorRef.current?.getValue() || ""
 
-    // Allow send if there's text, images, or pasted text files
+    // Allow send if there's text, images, files, or pasted text files
     const hasText = message.trim().length > 0
     const hasImages = images.filter((img) => !img.isLoading && img.url).length > 0
+    const hasFiles = files.filter((f) => !f.isLoading).length > 0
     const hasPastedTexts = pastedTexts.length > 0
 
-    if ((!hasText && !hasImages && !hasPastedTexts) || !selectedProject) {
+    if ((!hasText && !hasImages && !hasFiles && !hasPastedTexts) || !selectedProject) {
       return
     }
 
@@ -1055,9 +1085,9 @@ export function NewChatForm({
       branchType:
         workMode === "worktree" ? selectedBranchType : undefined,
       useWorktree: workMode === "worktree",
-      mode: isPlanMode ? "plan" : "agent",
+      mode: agentMode,
     })
-    // Editor, images, and pasted texts are cleared in onSuccess callback
+    // Editor, images, files, and pasted texts are cleared in onSuccess callback
   }, [
     selectedProject,
     validatedProject?.path,
@@ -1067,8 +1097,9 @@ export function NewChatForm({
     selectedBranchType,
     workMode,
     images,
+    files,
     pastedTexts,
-    isPlanMode,
+    agentMode,
     trpcUtils,
   ])
 
@@ -1208,13 +1239,13 @@ export function NewChatForm({
             editorRef.current?.clear()
             return
           case "plan":
-            if (!isPlanMode) {
-              setIsPlanMode(true)
+            if (agentMode !== "plan") {
+              setAgentMode("plan")
             }
             return
           case "agent":
-            if (isPlanMode) {
-              setIsPlanMode(false)
+            if (agentMode === "plan") {
+              setAgentMode("agent")
             }
             return
         }
@@ -1224,7 +1255,7 @@ export function NewChatForm({
       // insert the command and let user add arguments or press Enter to send
       editorRef.current?.setValue(`/${command.name} `)
     },
-    [isPlanMode, setIsPlanMode],
+    [agentMode],
   )
 
   // Paste handler for images, plain text, and large text (saved as files)
@@ -1381,9 +1412,9 @@ export function NewChatForm({
     [validatedProject?.path, handleAddAttachments, trpcUtils],
   )
 
-  // Context items for images and pasted text files
+  // Context items for images, files, and pasted text files
   const contextItems =
-    images.length > 0 || pastedTexts.length > 0 ? (
+    images.length > 0 || files.length > 0 || pastedTexts.length > 0 ? (
       <div className="flex flex-wrap gap-[6px]">
         {(() => {
           // Build allImages array for gallery navigation
@@ -1408,6 +1439,17 @@ export function NewChatForm({
             />
           ))
         })()}
+        {files.map((f) => (
+          <AgentFileItem
+            key={f.id}
+            id={f.id}
+            filename={f.filename}
+            url={f.url || ""}
+            size={f.size}
+            isLoading={f.isLoading}
+            onRemove={() => removeFile(f.id)}
+          />
+        ))}
         {pastedTexts.map((pt) => (
           <AgentPastedTextItem
             key={pt.id}
@@ -1512,7 +1554,7 @@ export function NewChatForm({
                       onCloseSlashTrigger={handleCloseSlashTrigger}
                       onContentChange={handleContentChange}
                       onSubmit={handleSend}
-                      onShiftTab={() => setIsPlanMode((prev) => !prev)}
+                      onShiftTab={toggleMode}
                       placeholder="Plan, @ for context, / for commands"
                       className={cn(
                         "bg-transparent max-h-[240px] overflow-y-auto p-1",
@@ -1542,12 +1584,12 @@ export function NewChatForm({
                         }}
                       >
                         <DropdownMenuTrigger className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70">
-                          {isPlanMode ? (
+                          {agentMode === "plan" ? (
                             <PlanIcon className="h-3.5 w-3.5" />
                           ) : (
                             <AgentIcon className="h-3.5 w-3.5" />
                           )}
-                          <span>{isPlanMode ? "Plan" : "Agent"}</span>
+                          <span>{agentMode === "plan" ? "Plan" : "Agent"}</span>
                           <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
@@ -1564,7 +1606,7 @@ export function NewChatForm({
                                 tooltipTimeoutRef.current = null
                               }
                               setModeTooltip(null)
-                              setIsPlanMode(false)
+                              setAgentMode("agent")
                               setModeDropdownOpen(false)
                             }}
                             className="justify-between gap-2"
@@ -1608,7 +1650,7 @@ export function NewChatForm({
                               <AgentIcon className="w-4 h-4 text-muted-foreground" />
                               <span>Agent</span>
                             </div>
-                            {!isPlanMode && (
+                            {agentMode !== "plan" && (
                               <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                             )}
                           </DropdownMenuItem>
@@ -1620,7 +1662,7 @@ export function NewChatForm({
                                 tooltipTimeoutRef.current = null
                               }
                               setModeTooltip(null)
-                              setIsPlanMode(true)
+                              setAgentMode("plan")
                               setModeDropdownOpen(false)
                             }}
                             className="justify-between gap-2"
@@ -1663,7 +1705,7 @@ export function NewChatForm({
                               <PlanIcon className="w-4 h-4 text-muted-foreground" />
                               <span>Plan</span>
                             </div>
-                            {isPlanMode && (
+                            {agentMode === "plan" && (
                               <CheckIcon className="h-3.5 w-3.5 ml-auto shrink-0" />
                             )}
                           </DropdownMenuItem>
@@ -1806,11 +1848,10 @@ export function NewChatForm({
                         type="file"
                         ref={fileInputRef}
                         hidden
-                        accept="image/jpeg,image/png"
                         multiple
                         onChange={(e) => {
-                          const files = Array.from(e.target.files || [])
-                          handleAddAttachments(files)
+                          const inputFiles = Array.from(e.target.files || [])
+                          handleAddAttachments(inputFiles)
                           e.target.value = "" // Reset to allow same file selection
                         }}
                       />
@@ -1823,7 +1864,7 @@ export function NewChatForm({
                           size="icon"
                           className="h-7 w-7 rounded-sm outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
                           onClick={() => fileInputRef.current?.click()}
-                          disabled={images.length >= 5}
+                          disabled={images.length >= 5 && files.length >= 10}
                         >
                           <AttachIcon className="h-4 w-4" />
                         </Button>
@@ -1838,7 +1879,8 @@ export function NewChatForm({
                             !hasContent || !selectedProject || isUploading,
                           )}
                           onClick={handleSend}
-                          isPlanMode={isPlanMode}
+                          mode={agentMode}
+                          hasContent={hasContent}
                           showVoiceInput={isVoiceAvailable}
                           isRecording={isVoiceRecording}
                           isTranscribing={isTranscribing}
@@ -2089,7 +2131,7 @@ export function NewChatForm({
                   searchText={slashSearchText}
                   position={slashPosition}
                   projectPath={validatedProject?.path}
-                  isPlanMode={isPlanMode}
+                  mode={agentMode}
                   disabledCommands={["clear"]}
                 />
               </div>

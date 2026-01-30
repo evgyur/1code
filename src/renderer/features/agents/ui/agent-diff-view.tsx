@@ -17,7 +17,9 @@ import {
 } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
-import { agentsFocusedDiffFileAtom, filteredDiffFilesAtom, viewedFilesAtomFamily, type ViewedFileState } from "../atoms"
+import { agentsFocusedDiffFileAtom, filteredDiffFilesAtom, viewedFilesAtomFamily, fileViewerOpenAtomFamily, diffViewDisplayModeAtom, diffSidebarOpenAtomFamily, type ViewedFileState } from "../atoms"
+import { preferredEditorAtom } from "../../../lib/atoms"
+import { APP_META } from "../../../../shared/external-apps"
 import { DiffModeEnum, DiffView, DiffFile } from "@git-diff-view/react"
 import "@git-diff-view/react/styles/diff-view-pure.css"
 import { useTheme } from "next-themes"
@@ -70,8 +72,10 @@ import {
 // import { useIsHydrated } from "@/hooks/use-is-hydrated"
 const useIsHydrated = () => true // Desktop is always hydrated
 import { cn } from "../../../lib/utils"
+import { isDesktopApp } from "../../../lib/utils/platform"
 import { api } from "../../../lib/mock-api"
 import { trpcClient } from "../../../lib/trpc"
+import { remoteApi } from "../../../lib/remote-api"
 import {
   getDiffHighlighter,
   setDiffViewTheme,
@@ -374,6 +378,10 @@ interface FileDiffCardProps {
   isViewed: boolean
   /** Callback to toggle viewed state */
   onToggleViewed: (fileKey: string, diffText: string) => void
+  /** Whether to show the viewed checkbox (hide for sandboxes) */
+  showViewed?: boolean
+  /** Chat ID for file preview sidebar */
+  chatId?: string
 }
 
 // Custom comparator to prevent unnecessary re-renders
@@ -399,6 +407,8 @@ const fileDiffCardAreEqual = (
   if (prev.worktreePath !== next.worktreePath) return false
   // Viewed state
   if (prev.isViewed !== next.isViewed) return false
+  if (prev.showViewed !== next.showViewed) return false
+  if (prev.chatId !== next.chatId) return false
   return true
 }
 
@@ -418,6 +428,8 @@ const FileDiffCard = memo(function FileDiffCard({
   onDiscardFile,
   isViewed,
   onToggleViewed,
+  showViewed = true,
+  chatId,
 }: FileDiffCardProps) {
   const diffViewRef = useRef<{ getDiffFileInstance: () => DiffFile } | null>(
     null,
@@ -428,6 +440,26 @@ const FileDiffCard = memo(function FileDiffCard({
   // tRPC mutations for file operations
   const openInFinderMutation = trpcClient.external.openInFinder.mutate
   const openInEditorMutation = trpcClient.external.openFileInEditor.mutate
+  const openInAppMutation = trpcClient.external.openInApp.mutate
+
+  // Preferred editor
+  const preferredEditor = useAtomValue(preferredEditorAtom)
+  const editorMeta = APP_META[preferredEditor]
+
+  // File viewer (file preview sidebar)
+  const fileViewerAtom = useMemo(
+    () => fileViewerOpenAtomFamily(chatId || ""),
+    [chatId],
+  )
+  const setFileViewerPath = useSetAtom(fileViewerAtom)
+
+  // Diff sidebar state (to close dialog/fullscreen when opening file preview)
+  const diffDisplayMode = useAtomValue(diffViewDisplayModeAtom)
+  const diffSidebarAtom = useMemo(
+    () => diffSidebarOpenAtomFamily(chatId || ""),
+    [chatId],
+  )
+  const setDiffSidebarOpen = useSetAtom(diffSidebarAtom)
 
   // Expand/collapse all hunks when button is clicked
   useEffect(() => {
@@ -495,6 +527,21 @@ const FileDiffCard = memo(function FileDiffCard({
   const handleOpenInEditor = () => {
     if (absolutePath && worktreePath) {
       openInEditorMutation({ path: absolutePath, cwd: worktreePath })
+    }
+  }
+
+  const handleOpenInPreferredEditor = () => {
+    if (absolutePath) {
+      openInAppMutation({ path: absolutePath, app: preferredEditor })
+    }
+  }
+
+  const handleOpenInFilePreview = () => {
+    if (absolutePath) {
+      setFileViewerPath(absolutePath)
+      if (diffDisplayMode !== "side-peek") {
+        setDiffSidebarOpen(false)
+      }
     }
   }
 
@@ -640,39 +687,41 @@ const FileDiffCard = memo(function FileDiffCard({
               </div>
             )}
 
-          {/* Viewed checkbox with label - GitHub style */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onToggleViewed(file.key, file.diffText)
-                }}
-                className={cn(
-                  "shrink-0 h-6 pl-1 pr-1.5 rounded-md flex items-center gap-1 transition-all duration-150 text-xs font-medium",
-                  isViewed
-                    ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                )}
-                aria-pressed={isViewed}
-              >
-                <div className={cn(
-                  "size-4 rounded flex items-center justify-center transition-all duration-150",
-                  isViewed
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-muted-foreground/40",
-                )}>
-                  {isViewed && <Check className="size-3" strokeWidth={2.5} />}
-                </div>
-                <span>Viewed</span>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {isViewed ? "Mark as unviewed" : "Mark as viewed"}
-              <Kbd>V</Kbd>
-            </TooltipContent>
-          </Tooltip>
+          {/* Viewed checkbox with label - GitHub style (hidden for sandboxes) */}
+          {showViewed && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleViewed(file.key, file.diffText)
+                  }}
+                  className={cn(
+                    "shrink-0 h-6 pl-1 pr-1.5 rounded-md flex items-center gap-1 transition-all duration-150 text-xs font-medium",
+                    isViewed
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
+                  aria-pressed={isViewed}
+                >
+                  <div className={cn(
+                    "size-4 rounded flex items-center justify-center transition-all duration-150",
+                    isViewed
+                      ? "bg-primary text-primary-foreground"
+                      : "border border-muted-foreground/40",
+                  )}>
+                    {isViewed && <Check className="size-3" strokeWidth={2.5} />}
+                  </div>
+                  <span>Viewed</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isViewed ? "Mark as unviewed" : "Mark as viewed"}
+                <Kbd>V</Kbd>
+              </TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </header>
   )
@@ -702,9 +751,12 @@ const FileDiffCard = memo(function FileDiffCard({
               <FolderIcon className="mr-2 size-3.5" />
               Reveal in Finder
             </ContextMenuItem>
-            <ContextMenuItem onClick={handleOpenInEditor} className="text-xs">
-              <ExternalLinkIcon className="mr-2 size-3.5" />
-              Open in Editor
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={handleOpenInFilePreview} className="text-xs">
+              Open in File Preview
+            </ContextMenuItem>
+            <ContextMenuItem onClick={handleOpenInPreferredEditor} className="text-xs">
+              Open in {editorMeta.label}
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem
@@ -823,6 +875,9 @@ export interface AgentDiffViewRef {
   markAllUnviewed: () => void
 }
 
+// DEBUG: Render counter
+let renderCount = 0
+
 export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
   function AgentDiffView(
     {
@@ -846,6 +901,10 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
     },
     ref,
   ) {
+    // DEBUG: Log renders
+    renderCount++
+    console.log(`[AgentDiffView] RENDER #${renderCount}`, { chatId, sandboxId, initialDiff: initialDiff?.slice(0, 50), initialParsedFiles: initialParsedFiles?.length })
+
     const { resolvedTheme } = useTheme()
     const isHydrated = useIsHydrated()
     const codeThemeId = useCodeTheme()
@@ -1283,6 +1342,29 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks are stable, excluding to prevent loops
     }, [collapsedByFileKey, fileDiffs])
 
+    // Proactively invalidate viewed state when file content changes (hash mismatch)
+    // This ensures all consumers of viewedFilesAtomFamily (changes-view, changes-widget)
+    // see the correct viewed state, not just agent-diff-view which checks hashes locally
+    useEffect(() => {
+      if (fileDiffs.length === 0) return
+
+      const keysToInvalidate: string[] = []
+      for (const file of fileDiffs) {
+        const viewedState = viewedFiles[file.key]
+        if (viewedState?.viewed && viewedState.contentHash !== hashString(file.diffText)) {
+          keysToInvalidate.push(file.key)
+        }
+      }
+
+      if (keysToInvalidate.length > 0) {
+        const updated = { ...viewedFiles }
+        for (const key of keysToInvalidate) {
+          updated[key] = { viewed: false, contentHash: "" }
+        }
+        setViewedFiles(updated)
+      }
+    }, [fileDiffs, viewedFiles, setViewedFiles])
+
     // Notify parent when viewed count changes
     const prevViewedCountRef = useRef<number | null>(null)
     useEffect(() => {
@@ -1440,6 +1522,13 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
 
     useEffect(() => {
       // Desktop: use worktreePath, Web: use sandboxId
+      console.log("[AgentDiffView] File content effect:", {
+        fileDiffsCount: fileDiffs.length,
+        isLoadingFileContents,
+        worktreePath: !!worktreePath,
+        sandboxId,
+        existingContents: Object.keys(fileContents).length
+      })
       if (fileDiffs.length === 0 || isLoadingFileContents) return
       if (!worktreePath && !sandboxId) return
       // Skip if we already have enough contents
@@ -1448,6 +1537,7 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
         existingContentCount >= Math.min(fileDiffs.length, MAX_PREFETCH_FILES)
       )
         return
+      console.log("[AgentDiffView] Will fetch file contents...")
 
       const fetchAllContents = async () => {
         setIsLoadingFileContents(true)
@@ -1489,29 +1579,39 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
             }
             setFileContents(newContents)
           } else if (sandboxId) {
-            // Web fallback: use sandbox API (still individual calls for web)
+            // Sandbox: use remoteApi on desktop, relative fetch on web
+            console.log("[AgentDiffView] Fetching file contents for sandbox, isDesktop:", isDesktopApp())
             const results = await Promise.allSettled(
               filesToFetch.map(async ({ key, filePath }) => {
-                const response = await Promise.race([
-                  fetch(
-                    `/api/agents/sandbox/${sandboxId}/files?path=${encodeURIComponent(filePath)}`,
-                  ),
-                  new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error("Timeout")), 5000),
-                  ),
-                ])
-                if (!response.ok) throw new Error("Failed to fetch file")
-                const data = await response.json()
-                return { key, content: data.content }
+                if (isDesktopApp()) {
+                  // Desktop: use signedFetch via remoteApi
+                  const data = await remoteApi.getSandboxFile(sandboxId, filePath)
+                  return { key, content: data.content }
+                } else {
+                  // Web: use relative fetch
+                  const response = await Promise.race([
+                    fetch(
+                      `/api/agents/sandbox/${sandboxId}/files?path=${encodeURIComponent(filePath)}`,
+                    ),
+                    new Promise<never>((_, reject) =>
+                      setTimeout(() => reject(new Error("Timeout")), 5000),
+                    ),
+                  ])
+                  if (!response.ok) throw new Error("Failed to fetch file")
+                  const data = await response.json()
+                  return { key, content: data.content }
+                }
               }),
             )
 
+            console.log("[AgentDiffView] File content results:", results.length, "files")
             const newContents: Record<string, string> = {}
             for (const result of results) {
               if (result.status === "fulfilled" && result.value?.content) {
                 newContents[result.value.key] = result.value.content
               }
             }
+            console.log("[AgentDiffView] Setting file contents:", Object.keys(newContents).length, "files")
             setFileContents(newContents)
           }
         } catch (error) {
@@ -1675,12 +1775,22 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
     // When filtering is active, parent already has correct stats from fetchDiffStats
     const prevStatsRef = useRef<{ fileCount: number; additions: number; deletions: number; isLoading: boolean } | null>(null)
     useEffect(() => {
+      console.log('[AgentDiffView] onStatsChange useEffect running', {
+        filteredDiffFiles: filteredDiffFiles?.length,
+        allFileDiffsLength: allFileDiffs.length,
+        isLoadingDiff,
+        totalAdditions,
+        totalDeletions,
+        prevStats: prevStatsRef.current,
+      })
       // Don't report stats when filtering is active - parent already has correct totals
       if (filteredDiffFiles && filteredDiffFiles.length > 0) {
+        console.log('[AgentDiffView] Early return: filtering active')
         return
       }
       if (allFileDiffs.length === 0 && !isLoadingDiff) {
         // Don't report empty stats - let parent's fetchDiffStats be the source of truth
+        console.log('[AgentDiffView] Early return: no files and not loading')
         return
       }
       // Only notify if stats actually changed
@@ -1690,8 +1800,15 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
         prevStatsRef.current?.deletions === totalDeletions &&
         prevStatsRef.current?.isLoading === isLoadingDiff
       ) {
+        console.log('[AgentDiffView] Early return: stats unchanged')
         return
       }
+      console.log('[AgentDiffView] CALLING onStatsChange!', {
+        fileCount: allFileDiffs.length,
+        additions: totalAdditions,
+        deletions: totalDeletions,
+        isLoading: isLoadingDiff,
+      })
       prevStatsRef.current = {
         fileCount: allFileDiffs.length,
         additions: totalAdditions,
@@ -2065,6 +2182,8 @@ export const AgentDiffView = forwardRef<AgentDiffViewRef, AgentDiffViewProps>(
                         onDiscardFile={handleDiscardFile}
                         isViewed={isFileViewed(file.key, file.diffText)}
                         onToggleViewed={handleToggleViewed}
+                        showViewed={!!worktreePath}
+                        chatId={chatId}
                       />
                     </div>
                   </div>

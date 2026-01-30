@@ -14,7 +14,7 @@ import {
   customHotkeysAtom,
   betaKanbanEnabledAtom,
 } from "../../lib/atoms"
-import { selectedAgentChatIdAtom, selectedProjectAtom, selectedDraftIdAtom, showNewChatFormAtom } from "../agents/atoms"
+import { selectedAgentChatIdAtom, selectedProjectAtom, selectedDraftIdAtom, showNewChatFormAtom, desktopViewAtom, fileSearchDialogOpenAtom } from "../agents/atoms"
 import { trpc } from "../../lib/trpc"
 import { useAgentsHotkeys } from "../agents/lib/agents-hotkeys-manager"
 import { toggleSearchAtom } from "../agents/search"
@@ -27,7 +27,7 @@ import { AgentsContent } from "../agents/ui/agents-content"
 import { UpdateBanner } from "../../components/update-banner"
 import { WindowsTitleBar } from "../../components/windows-title-bar"
 import { useUpdateChecker } from "../../lib/hooks/use-update-checker"
-import { useAgentSubChatStore } from "../../lib/stores/sub-chat-store"
+import { useAgentSubChatStore } from "../agents/stores/sub-chat-store"
 import { QueueProcessor } from "../agents/components/queue-processor"
 
 // ============================================================================
@@ -89,11 +89,13 @@ export function AgentsLayout() {
   const [sidebarWidth, setSidebarWidth] = useAtom(agentsSidebarWidthAtom)
   const [settingsOpen, setSettingsOpen] = useAtom(agentsSettingsDialogOpenAtom)
   const setSettingsActiveTab = useSetAtom(agentsSettingsDialogActiveTabAtom)
+  const setFileSearchDialogOpen = useSetAtom(fileSearchDialogOpenAtom)
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const [selectedProject, setSelectedProject] = useAtom(selectedProjectAtom)
   const setSelectedDraftId = useSetAtom(selectedDraftIdAtom)
   const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
   const betaKanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
+  const setDesktopView = useSetAtom(desktopViewAtom)
   const setAnthropicOnboardingCompleted = useSetAtom(
     anthropicOnboardingCompletedAtom
   )
@@ -222,9 +224,11 @@ export function AgentsLayout() {
     setSelectedChatId,
     setSelectedDraftId,
     setShowNewChatForm,
+    setDesktopView,
     setSidebarOpen,
     setSettingsDialogOpen: setSettingsOpen,
     setSettingsActiveTab,
+    setFileSearchDialogOpen,
     toggleChatSearch,
     selectedChatId,
     customHotkeysConfig,

@@ -22,11 +22,26 @@ import {
   isDesktopAtom,
   isFullscreenAtom,
   showOfflineModeFeaturesAtom,
+  chatSourceModeAtom,
+  selectedTeamIdAtom,
+  type ChatSourceMode,
   showWorkspaceIconAtom,
   betaKanbanEnabledAtom,
+  betaAutomationsEnabledAtom,
 } from "../../lib/atoms"
+import {
+  useRemoteChats,
+  useUserTeams,
+  usePrefetchRemoteChat,
+  useArchiveRemoteChat,
+  useArchiveRemoteChatsBatch,
+  useRestoreRemoteChat,
+  useRenameRemoteChat,
+} from "../../lib/hooks/use-remote-chats"
 import { ArchivePopover } from "../agents/ui/archive-popover"
-import { ChevronDown, MoreHorizontal, Columns3 } from "lucide-react"
+import { ChevronDown, MoreHorizontal, Columns3, ArrowUpRight } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import { remoteTrpc } from "../../lib/remote-trpc"
 // import { useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // import { useCombinedAuth } from "@/lib/hooks/use-combined-auth"
 const useCombinedAuth = () => ({ userId: null })
@@ -36,6 +51,8 @@ const AuthDialog = () => null
 // import { DiscordIcon } from "@/components/icons"
 import { DiscordIcon } from "../../icons"
 import { AgentsRenameSubChatDialog } from "../agents/components/agents-rename-subchat-dialog"
+import { OpenLocallyDialog } from "../agents/components/open-locally-dialog"
+import { useAutoImport } from "../agents/hooks/use-auto-import"
 import { ConfirmArchiveDialog } from "../../components/confirm-archive-dialog"
 import { trpc } from "../../lib/trpc"
 import { toast } from "sonner"
@@ -80,12 +97,14 @@ import {
   QuestionIcon,
   KeyboardIcon,
   TicketIcon,
+  CloudIcon,
 } from "../../components/ui/icons"
 import { Logo } from "../../components/ui/logo"
 import { Input } from "../../components/ui/input"
 import { Button } from "../../components/ui/button"
 import {
   selectedAgentChatIdAtom,
+  selectedChatIsRemoteAtom,
   previousAgentChatIdAtom,
   selectedDraftIdAtom,
   showNewChatFormAtom,
@@ -97,13 +116,15 @@ import {
   justCreatedIdsAtom,
   undoStackAtom,
   pendingUserQuestionsAtom,
+  desktopViewAtom,
   type UndoItem,
 } from "../agents/atoms"
 import { NetworkStatus } from "../../components/ui/network-status"
 import { useAgentSubChatStore, OPEN_SUB_CHATS_CHANGE_EVENT } from "../agents/stores/sub-chat-store"
+import { getWindowId } from "../../contexts/WindowContext"
 import { AgentsHelpPopover } from "../agents/components/agents-help-popover"
 import { getShortcutKey, isDesktopApp } from "../../lib/utils/platform"
-import { useResolvedHotkeyDisplay } from "../../lib/hotkeys"
+import { useResolvedHotkeyDisplay, useResolvedHotkeyDisplayWithAlt } from "../../lib/hotkeys"
 import { pluralize } from "../agents/utils/pluralize"
 import { useNewChatDrafts, deleteNewChatDraft, type NewChatDraft } from "../agents/lib/drafts"
 import {
@@ -422,6 +443,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   areAllSelectedPinned,
   filteredChatsLength,
   isLastInFilteredChats,
+  isRemote,
   showIcon,
   onChatClick,
   onCheckboxClick,
@@ -433,6 +455,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   onCopyBranch,
   onArchiveAllBelow,
   onArchiveOthers,
+  onOpenLocally,
   onBulkPin,
   onBulkUnpin,
   onBulkArchive,
@@ -468,6 +491,7 @@ const AgentChatItem = React.memo(function AgentChatItem({
   areAllSelectedPinned: boolean
   filteredChatsLength: number
   isLastInFilteredChats: boolean
+  isRemote: boolean
   showIcon: boolean
   onChatClick: (chatId: string, e?: React.MouseEvent, globalIndex?: number) => void
   onCheckboxClick: (e: React.MouseEvent, chatId: string) => void
@@ -475,10 +499,11 @@ const AgentChatItem = React.memo(function AgentChatItem({
   onMouseLeave: () => void
   onArchive: (chatId: string) => void
   onTogglePin: (chatId: string) => void
-  onRenameClick: (chat: { id: string; name: string | null }) => void
+  onRenameClick: (chat: { id: string; name: string | null; isRemote?: boolean }) => void
   onCopyBranch: (branch: string) => void
   onArchiveAllBelow: (chatId: string) => void
   onArchiveOthers: (chatId: string) => void
+  onOpenLocally: (chatId: string) => void
   onBulkPin: () => void
   onBulkUnpin: () => void
   onBulkArchive: () => void
@@ -640,7 +665,11 @@ const AgentChatItem = React.memo(function AgentChatItem({
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60 min-w-0">
+              <div className="flex items-center gap-1 text-[11px] text-muted-foreground/60 min-w-0">
+                {/* Cloud icon for remote chats */}
+                {isRemote && (
+                  <CloudIcon className="h-2.5 w-2.5 flex-shrink-0" />
+                )}
                 <span className="truncate flex-1 min-w-0">{displayText}</span>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {stats && (stats.additions > 0 || stats.deletions > 0) && (
@@ -686,10 +715,18 @@ const AgentChatItem = React.memo(function AgentChatItem({
           </>
         ) : (
           <>
+            {isRemote && (
+              <>
+                <ContextMenuItem onClick={() => onOpenLocally(chatId)}>
+                  Fork Locally
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+              </>
+            )}
             <ContextMenuItem onClick={() => onTogglePin(chatId)}>
               {isPinned ? "Unpin workspace" : "Pin workspace"}
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => onRenameClick({ id: chatId, name: chatName })}>
+            <ContextMenuItem onClick={() => onRenameClick({ id: chatId, name: chatName, isRemote })}>
               Rename workspace
             </ContextMenuItem>
             {chatBranch && (
@@ -700,23 +737,23 @@ const AgentChatItem = React.memo(function AgentChatItem({
             <ContextMenuSub>
               <ContextMenuSubTrigger>Export workspace</ContextMenuSubTrigger>
               <ContextMenuSubContent sideOffset={6} alignOffset={-4}>
-                <ContextMenuItem onClick={() => exportChat({ chatId, format: "markdown" })}>
+                <ContextMenuItem onClick={() => exportChat({ chatId: isRemote ? chatId.replace(/^remote_/, '') : chatId, format: "markdown", isRemote })}>
                   Download as Markdown
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => exportChat({ chatId, format: "json" })}>
+                <ContextMenuItem onClick={() => exportChat({ chatId: isRemote ? chatId.replace(/^remote_/, '') : chatId, format: "json", isRemote })}>
                   Download as JSON
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => exportChat({ chatId, format: "text" })}>
+                <ContextMenuItem onClick={() => exportChat({ chatId: isRemote ? chatId.replace(/^remote_/, '') : chatId, format: "text", isRemote })}>
                   Download as Text
                 </ContextMenuItem>
                 <ContextMenuSeparator />
-                <ContextMenuItem onClick={() => copyChat({ chatId, format: "markdown" })}>
+                <ContextMenuItem onClick={() => copyChat({ chatId: isRemote ? chatId.replace(/^remote_/, '') : chatId, format: "markdown", isRemote })}>
                   Copy as Markdown
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => copyChat({ chatId, format: "json" })}>
+                <ContextMenuItem onClick={() => copyChat({ chatId: isRemote ? chatId.replace(/^remote_/, '') : chatId, format: "json", isRemote })}>
                   Copy as JSON
                 </ContextMenuItem>
-                <ContextMenuItem onClick={() => copyChat({ chatId, format: "text" })}>
+                <ContextMenuItem onClick={() => copyChat({ chatId: isRemote ? chatId.replace(/^remote_/, '') : chatId, format: "text", isRemote })}>
                   Copy as Text
                 </ContextMenuItem>
               </ContextMenuSubContent>
@@ -759,6 +796,7 @@ function chatListSectionPropsAreEqual(
 ): boolean {
   // Quick checks for primitive props that change often
   if (prevProps.selectedChatId !== nextProps.selectedChatId) return false
+  if (prevProps.selectedChatIsRemote !== nextProps.selectedChatIsRemote) return false
   if (prevProps.focusedChatIndex !== nextProps.focusedChatIndex) return false
   if (prevProps.isMultiSelectMode !== nextProps.isMultiSelectMode) return false
   if (prevProps.canShowPinOption !== nextProps.canShowPinOption) return false
@@ -800,9 +838,13 @@ interface ChatListSectionProps {
     name: string | null
     branch: string | null
     updatedAt: Date | null
-    projectId: string
+    projectId: string | null
+    isRemote: boolean
+    meta?: { repository?: string; branch?: string | null } | null
+    remoteStats?: { fileCount: number; additions: number; deletions: number } | null
   }>
   selectedChatId: string | null
+  selectedChatIsRemote: boolean
   focusedChatIndex: number
   loadingChatIds: Set<string>
   unseenChanges: Set<string>
@@ -825,10 +867,11 @@ interface ChatListSectionProps {
   onMouseLeave: () => void
   onArchive: (chatId: string) => void
   onTogglePin: (chatId: string) => void
-  onRenameClick: (chat: { id: string; name: string | null }) => void
+  onRenameClick: (chat: { id: string; name: string | null; isRemote?: boolean }) => void
   onCopyBranch: (branch: string) => void
   onArchiveAllBelow: (chatId: string) => void
   onArchiveOthers: (chatId: string) => void
+  onOpenLocally: (chatId: string) => void
   onBulkPin: () => void
   onBulkUnpin: () => void
   onBulkArchive: () => void
@@ -844,6 +887,7 @@ const ChatListSection = React.memo(function ChatListSection({
   title,
   chats,
   selectedChatId,
+  selectedChatIsRemote,
   focusedChatIndex,
   loadingChatIds,
   unseenChanges,
@@ -870,6 +914,7 @@ const ChatListSection = React.memo(function ChatListSection({
   onCopyBranch,
   onArchiveAllBelow,
   onArchiveOthers,
+  onOpenLocally,
   onBulkPin,
   onBulkUnpin,
   onBulkArchive,
@@ -903,23 +948,38 @@ const ChatListSection = React.memo(function ChatListSection({
       <div className="list-none p-0 m-0 mb-3">
         {chats.map((chat) => {
           const isLoading = loadingChatIds.has(chat.id)
-          const isSelected = selectedChatId === chat.id
+          // For remote chats, compare without prefix; for local, compare directly
+          // Remote chat IDs in list have "remote_" prefix, but selectedChatId is the original ID
+          const chatOriginalId = chat.isRemote ? chat.id.replace(/^remote_/, '') : chat.id
+          const isSelected = selectedChatId === chatOriginalId && selectedChatIsRemote === chat.isRemote
           const isPinned = pinnedChatIds.has(chat.id)
           const globalIndex = globalIndexMap.get(chat.id) ?? -1
           const isFocused = focusedChatIndex === globalIndex && focusedChatIndex >= 0
-          const project = projectsMap.get(chat.projectId)
-          const repoName = project?.gitRepo || project?.name
+
+          // For remote chats, get repo info from meta; for local, from projectsMap
+          const project = chat.projectId ? projectsMap.get(chat.projectId) : null
+          const repoName = chat.isRemote
+            ? chat.meta?.repository
+            : (project?.gitRepo || project?.name)
           const displayText = chat.branch
             ? repoName
               ? `${repoName} • ${chat.branch}`
               : chat.branch
-            : repoName || "Local project"
+            : repoName || (chat.isRemote ? "Remote project" : "Local project")
+
           const isChecked = selectedChatIds.has(chat.id)
-          const stats = workspaceFileStats.get(chat.id)
+          // For remote chats, use remoteStats; for local, use workspaceFileStats
+          const stats = chat.isRemote ? chat.remoteStats : workspaceFileStats.get(chat.id)
           const hasPendingPlan = workspacePendingPlans.has(chat.id)
           const hasPendingQuestion = workspacePendingQuestions.has(chat.id)
           const isLastInFilteredChats = globalIndex === filteredChats.length - 1
           const isJustCreated = justCreatedIds.has(chat.id)
+
+          // For remote chats, extract gitOwner from meta.repository (e.g. "owner/repo" -> "owner")
+          const gitOwner = chat.isRemote
+            ? chat.meta?.repository?.split('/')[0]
+            : project?.gitOwner
+          const gitProvider = chat.isRemote ? 'github' : project?.gitProvider
 
           return (
             <AgentChatItem
@@ -928,7 +988,7 @@ const ChatListSection = React.memo(function ChatListSection({
               chatName={chat.name}
               chatBranch={chat.branch}
               chatUpdatedAt={chat.updatedAt}
-              chatProjectId={chat.projectId}
+              chatProjectId={chat.projectId ?? ""}
               globalIndex={globalIndex}
               isSelected={isSelected}
               isLoading={isLoading}
@@ -942,9 +1002,9 @@ const ChatListSection = React.memo(function ChatListSection({
               isDesktop={isDesktop}
               isPinned={isPinned}
               displayText={displayText}
-              gitOwner={project?.gitOwner}
-              gitProvider={project?.gitProvider}
-              stats={stats}
+              gitOwner={gitOwner}
+              gitProvider={gitProvider}
+              stats={stats ?? undefined}
               selectedChatIdsSize={selectedChatIds.size}
               canShowPinOption={canShowPinOption}
               areAllSelectedPinned={areAllSelectedPinned}
@@ -961,11 +1021,13 @@ const ChatListSection = React.memo(function ChatListSection({
               onCopyBranch={onCopyBranch}
               onArchiveAllBelow={onArchiveAllBelow}
               onArchiveOthers={onArchiveOthers}
+              onOpenLocally={onOpenLocally}
               onBulkPin={onBulkPin}
               onBulkUnpin={onBulkUnpin}
               onBulkArchive={onBulkArchive}
               archivePending={archivePending}
               archiveBatchPending={archiveBatchPending}
+              isRemote={chat.isRemote}
               nameRefCallback={nameRefCallback}
               formatTime={formatTime}
               isJustCreated={isJustCreated}
@@ -1009,6 +1071,7 @@ const KanbanButton = memo(function KanbanButton() {
   const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
   const setSelectedDraftId = useSetAtom(selectedDraftIdAtom)
   const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
+  const setDesktopView = useSetAtom(desktopViewAtom)
 
   // Resolved hotkey for tooltip (respects custom bindings)
   const openKanbanHotkey = useResolvedHotkeyDisplay("open-kanban")
@@ -1018,7 +1081,8 @@ const KanbanButton = memo(function KanbanButton() {
     setSelectedChatId(null)
     setSelectedDraftId(null)
     setShowNewChatForm(false)
-  }, [setSelectedChatId, setSelectedDraftId, setShowNewChatForm])
+    setDesktopView(null) // Clear automations/inbox view
+  }, [setSelectedChatId, setSelectedDraftId, setShowNewChatForm, setDesktopView])
 
   // Hide button if feature is disabled
   if (!kanbanEnabled) return null
@@ -1039,6 +1103,115 @@ const KanbanButton = memo(function KanbanButton() {
         {openKanbanHotkey && <Kbd>{openKanbanHotkey}</Kbd>}
       </TooltipContent>
     </Tooltip>
+  )
+})
+
+// Custom SVG icons matching web's icons.tsx
+function SidebarInboxIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M3 12H7.5C8.12951 12 8.72229 12.2964 9.1 12.8L9.4 13.2C9.77771 13.7036 10.3705 14 11 14H13C13.6295 14 14.2223 13.7036 14.6 13.2L14.9 12.8C15.2777 12.2964 15.8705 12 16.5 12H21M21.7365 11.5389L18.5758 6.00772C18.2198 5.38457 17.5571 5 16.8394 5H7.16065C6.44293 5 5.78024 5.38457 5.42416 6.00772L2.26351 11.5389C2.09083 11.841 2 12.1831 2 12.5311V17C2 18.1046 2.89543 19 4 19H20C21.1046 19 22 18.1046 22 17V12.5311C22 12.1831 21.9092 11.841 21.7365 11.5389Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function SidebarAutomationsIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...props}>
+      <path
+        d="M9.50006 5.39844C7.09268 6.1897 5.1897 8.09268 4.39844 10.5001M19.8597 14.5001C19.9518 14.0142 20.0001 13.5128 20.0001 13.0001C20.0001 10.9895 19.2584 9.1522 18.0337 7.74679M6.70841 19.0001C8.11868 20.2448 9.97117 21.0001 12.0001 21.0001C12.5127 21.0001 13.0141 20.9518 13.5 20.8597"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="5" r="2.5" stroke="currentColor" strokeWidth="2" />
+      <circle cx="20" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
+      <circle cx="4" cy="17" r="2.5" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  )
+}
+
+// Isolated Inbox Button - full-width navigation link matching web layout
+const InboxButton = memo(function InboxButton() {
+  const automationsEnabled = useAtomValue(betaAutomationsEnabledAtom)
+  const desktopView = useAtomValue(desktopViewAtom)
+  const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
+  const setSelectedDraftId = useSetAtom(selectedDraftIdAtom)
+  const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
+  const setDesktopView = useSetAtom(desktopViewAtom)
+  const teamId = useAtomValue(selectedTeamIdAtom)
+
+  const { data: unreadData } = useQuery({
+    queryKey: ["automations", "inboxUnreadCount", teamId],
+    queryFn: () => remoteTrpc.automations.getInboxUnreadCount.query({ teamId: teamId! }),
+    enabled: !!teamId && automationsEnabled,
+    refetchInterval: 30_000,
+  })
+  const inboxUnreadCount = unreadData?.count ?? 0
+
+  const handleClick = useCallback(() => {
+    setSelectedChatId(null)
+    setSelectedDraftId(null)
+    setShowNewChatForm(false)
+    setDesktopView("inbox")
+  }, [setSelectedChatId, setSelectedDraftId, setShowNewChatForm, setDesktopView])
+
+  if (!automationsEnabled) return null
+
+  const isActive = desktopView === "inbox"
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className={cn(
+        "flex items-center gap-2.5 w-full pl-2 pr-2 py-1.5 rounded-md text-sm transition-colors duration-150",
+        isActive
+          ? "bg-foreground/5 text-foreground"
+          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+      )}
+    >
+      <SidebarInboxIcon className="h-4 w-4" />
+      <span className="flex-1 text-left">Inbox</span>
+      {inboxUnreadCount > 0 && (
+        <span className="bg-primary text-primary-foreground text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+          {inboxUnreadCount > 99 ? "99+" : inboxUnreadCount}
+        </span>
+      )}
+    </button>
+  )
+})
+
+// Isolated Automations Button - full-width navigation link matching web layout
+const AutomationsButton = memo(function AutomationsButton() {
+  const automationsEnabled = useAtomValue(betaAutomationsEnabledAtom)
+
+  const handleClick = useCallback(() => {
+    window.desktopApi.openExternal("https://21st.dev/agents/app/async/automations")
+  }, [])
+
+  if (!automationsEnabled) return null
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className={cn(
+        "group flex items-center gap-2.5 w-full pl-2 pr-2 py-1.5 rounded-md text-sm transition-colors duration-150",
+        "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+      )}
+    >
+      <SidebarAutomationsIcon className="h-4 w-4" />
+      <span className="flex-1 text-left">Automations</span>
+      <ArrowUpRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
+    </button>
   )
 })
 
@@ -1482,10 +1655,12 @@ export function AgentsSidebar({
   onChatSelect,
 }: AgentsSidebarProps) {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const [selectedChatIsRemote, setSelectedChatIsRemote] = useAtom(selectedChatIsRemoteAtom)
   const previousChatId = useAtomValue(previousAgentChatIdAtom)
   const autoAdvanceTarget = useAtomValue(autoAdvanceTargetAtom)
   const [selectedDraftId, setSelectedDraftId] = useAtom(selectedDraftIdAtom)
   const setShowNewChatForm = useSetAtom(showNewChatFormAtom)
+  const setDesktopView = useSetAtom(desktopViewAtom)
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
   const pendingQuestions = useAtomValue(pendingUserQuestionsAtom)
   // Use ref instead of state to avoid re-renders on hover
@@ -1525,13 +1700,14 @@ export function AgentsSidebar({
   const { trigger: triggerHaptic } = useHaptic()
 
   // Resolved hotkey for tooltip
-  const newWorkspaceHotkey = useResolvedHotkeyDisplay("new-workspace")
+  const { primary: newWorkspaceHotkey, alt: newWorkspaceAltHotkey } = useResolvedHotkeyDisplayWithAlt("new-workspace")
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [renamingChat, setRenamingChat] = useState<{
     id: string
     name: string
+    isRemote?: boolean
   } | null>(null)
   const [renameLoading, setRenameLoading] = useState(false)
 
@@ -1541,6 +1717,10 @@ export function AgentsSidebar({
   const [activeProcessCount, setActiveProcessCount] = useState(0)
   const [hasWorktree, setHasWorktree] = useState(false)
   const [uncommittedCount, setUncommittedCount] = useState(0)
+
+  // Import sandbox dialog state
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importingChatId, setImportingChatId] = useState<string | null>(null)
 
   // Track initial mount to skip footer animation on load
   const hasFooterAnimated = useRef(false)
@@ -1571,8 +1751,107 @@ export function AgentsSidebar({
   // Desktop: use selectedProject instead of teams
   const [selectedProject] = useAtom(selectedProjectAtom)
 
-  // Fetch all chats (no project filter)
-  const { data: agentChats } = trpc.chats.list.useQuery({})
+  // Keep chatSourceModeAtom for backwards compatibility (used in other places)
+  const [chatSourceMode, setChatSourceMode] = useAtom(chatSourceModeAtom)
+  const teamId = useAtomValue(selectedTeamIdAtom)
+
+  // Sync chatSourceMode with selectedChatIsRemote on startup
+  // This fixes the race condition where atoms load independently from localStorage
+  const hasRunStartupSync = useRef(false)
+  useEffect(() => {
+    if (hasRunStartupSync.current) return
+    hasRunStartupSync.current = true
+
+    const correctMode = selectedChatIsRemote ? "sandbox" : "local"
+    if (chatSourceMode !== correctMode) {
+      setChatSourceMode(correctMode)
+    }
+  }, [])
+
+  // Fetch all local chats (no project filter)
+  const { data: localChats } = trpc.chats.list.useQuery({})
+
+  // Fetch user's teams (same as web) - always enabled to allow merged list
+  const { data: teams, isLoading: isTeamsLoading, isError: isTeamsError } = useUserTeams(true)
+
+  // Fetch remote sandbox chats (same as web) - requires teamId
+  const { data: remoteChats } = useRemoteChats()
+
+  // Prefetch individual chat data on hover
+  const prefetchRemoteChat = usePrefetchRemoteChat()
+
+  // Merge local and remote chats into unified list
+  const agentChats = useMemo(() => {
+    const unified: Array<{
+      id: string
+      name: string | null
+      createdAt: Date | null
+      updatedAt: Date | null
+      archivedAt: Date | null
+      projectId: string | null
+      worktreePath: string | null
+      branch: string | null
+      baseBranch: string | null
+      prUrl: string | null
+      prNumber: number | null
+      sandboxId?: string | null
+      meta?: { repository?: string; branch?: string | null } | null
+      isRemote: boolean
+      remoteStats?: { fileCount: number; additions: number; deletions: number } | null
+    }> = []
+
+    // Add local chats
+    if (localChats) {
+      for (const chat of localChats) {
+        unified.push({
+          id: chat.id,
+          name: chat.name,
+          createdAt: chat.createdAt,
+          updatedAt: chat.updatedAt,
+          archivedAt: chat.archivedAt,
+          projectId: chat.projectId,
+          worktreePath: chat.worktreePath,
+          branch: chat.branch,
+          baseBranch: chat.baseBranch,
+          prUrl: chat.prUrl,
+          prNumber: chat.prNumber,
+          isRemote: false,
+        })
+      }
+    }
+
+    // Add remote chats with prefixed IDs to avoid collisions
+    if (remoteChats) {
+      for (const chat of remoteChats) {
+        unified.push({
+          id: `remote_${chat.id}`,
+          name: chat.name,
+          createdAt: new Date(chat.created_at),
+          updatedAt: new Date(chat.updated_at),
+          archivedAt: null,
+          projectId: null,
+          worktreePath: null,
+          branch: chat.meta?.branch ?? null,
+          baseBranch: null,
+          prUrl: null,
+          prNumber: null,
+          sandboxId: chat.sandbox_id,
+          meta: chat.meta,
+          isRemote: true,
+          remoteStats: chat.stats,
+        })
+      }
+    }
+
+    // Sort by updatedAt descending (newest first)
+    unified.sort((a, b) => {
+      const aTime = a.updatedAt?.getTime() ?? 0
+      const bTime = b.updatedAt?.getTime() ?? 0
+      return bTime - aTime
+    })
+
+    return unified
+  }, [localChats, remoteChats])
 
   // Track open sub-chat changes for reactivity
   const [openSubChatsVersion, setOpenSubChatsVersion] = useState(0)
@@ -1591,10 +1870,12 @@ export function AgentsSidebar({
     void openSubChatsVersion
     if (!agentChats) return prevOpenSubChatIdsRef.current
 
+    const windowId = getWindowId()
     const allIds: string[] = []
     for (const chat of agentChats) {
       try {
-        const stored = localStorage.getItem(`agent-open-sub-chats-${chat.id}`)
+        // Use window-prefixed key (matches sub-chat-store.ts)
+        const stored = localStorage.getItem(`${windowId}:agent-open-sub-chats-${chat.id}`)
         if (stored) {
           const ids = JSON.parse(stored) as string[]
           allIds.push(...ids)
@@ -1631,6 +1912,9 @@ export function AgentsSidebar({
 
   // Fetch all projects for git info
   const { data: projects } = trpc.projects.list.useQuery()
+
+  // Auto-import hook for "Open Locally" functionality
+  const { getMatchingProjects, autoImport, isImporting } = useAutoImport()
 
   // Create map for quick project lookup by id
   const projectsMap = useMemo(() => {
@@ -1669,6 +1953,12 @@ export function AgentsSidebar({
       return prev
     })
   }, [setUndoStack])
+
+  // Remote archive mutations (for sandbox mode)
+  const archiveRemoteChatMutation = useArchiveRemoteChat()
+  const archiveRemoteChatsBatchMutation = useArchiveRemoteChatsBatch()
+  const restoreRemoteChatMutation = useRestoreRemoteChat()
+  const renameRemoteChatMutation = useRenameRemoteChat()
 
   // Archive chat mutation
   const archiveChatMutation = trpc.chats.archive.useMutation({
@@ -1742,7 +2032,23 @@ export function AgentsSidebar({
 
         if (lastItem.type === "workspace") {
           // Restore workspace from archive
-          restoreChatMutation.mutate({ id: lastItem.chatId })
+          if (lastItem.isRemote) {
+            // Strip remote_ prefix before calling API (stored with prefix for undo stack identification)
+            const originalId = lastItem.chatId.replace(/^remote_/, '')
+            restoreRemoteChatMutation.mutate(originalId, {
+              onSuccess: () => {
+                setSelectedChatId(originalId)
+                setSelectedChatIsRemote(true)
+                setChatSourceMode("sandbox")
+              },
+              onError: (error) => {
+                console.error('[handleUndo] Failed to restore remote workspace:', error)
+                toast.error("Failed to restore workspace")
+              },
+            })
+          } else {
+            restoreChatMutation.mutate({ id: lastItem.chatId })
+          }
         } else if (lastItem.type === "subchat") {
           // Restore sub-chat tab (re-add to open tabs)
           const store = useAgentSubChatStore.getState()
@@ -1754,7 +2060,7 @@ export function AgentsSidebar({
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [undoStack, setUndoStack, restoreChatMutation])
+  }, [undoStack, setUndoStack, restoreChatMutation, restoreRemoteChatMutation, setSelectedChatId])
 
   // Batch archive mutation
   const archiveChatsBatchMutation = trpc.chats.archiveBatch.useMutation({
@@ -1856,8 +2162,8 @@ export function AgentsSidebar({
     })
   }, [])
 
-  const handleRenameClick = useCallback((chat: { id: string; name: string | null }) => {
-    setRenamingChat(chat as { id: string; name: string })
+  const handleRenameClick = useCallback((chat: { id: string; name: string | null; isRemote?: boolean }) => {
+    setRenamingChat(chat as { id: string; name: string; isRemote?: boolean })
     setRenameDialogOpen(true)
   }, [])
 
@@ -1866,26 +2172,42 @@ export function AgentsSidebar({
 
     const chatId = renamingChat.id
     const oldName = renamingChat.name
-
-    // Optimistically update the query cache
-    utils.chats.list.setData({}, (old) => {
-      if (!old) return old
-      return old.map((c) => (c.id === chatId ? { ...c, name: newName } : c))
-    })
+    const isRemote = renamingChat.isRemote
 
     setRenameLoading(true)
 
     try {
-      await renameChatMutation.mutateAsync({
-        id: chatId,
-        name: newName,
-      })
-    } catch {
-      // Rollback on error
-      utils.chats.list.setData({}, (old) => {
-        if (!old) return old
-        return old.map((c) => (c.id === chatId ? { ...c, name: oldName } : c))
-      })
+      if (isRemote) {
+        // Remote chat rename
+        await renameRemoteChatMutation.mutateAsync({
+          chatId,
+          name: newName,
+        })
+      } else {
+        // Local chat rename - optimistically update the query cache
+        utils.chats.list.setData({}, (old) => {
+          if (!old) return old
+          return old.map((c) => (c.id === chatId ? { ...c, name: newName } : c))
+        })
+
+        try {
+          await renameChatMutation.mutateAsync({
+            id: chatId,
+            name: newName,
+          })
+        } catch {
+          // Rollback on error
+          utils.chats.list.setData({}, (old) => {
+            if (!old) return old
+            return old.map((c) => (c.id === chatId ? { ...c, name: oldName } : c))
+          })
+          throw new Error("Failed to rename local workspace")
+        }
+      }
+      setRenameDialogOpen(false)
+    } catch (error) {
+      console.error('[handleRenameSave] Rename failed:', error)
+      toast.error(isRemote ? "Failed to rename remote workspace" : "Failed to rename workspace")
     } finally {
       setRenameLoading(false)
       setRenamingChat(null)
@@ -1943,7 +2265,7 @@ export function AgentsSidebar({
 
     const filtered = searchQuery.trim()
       ? agentChats.filter((chat) =>
-          chat.name.toLowerCase().includes(searchQuery.toLowerCase()),
+          (chat.name ?? "").toLowerCase().includes(searchQuery.toLowerCase()),
         )
       : agentChats
 
@@ -1962,40 +2284,86 @@ export function AgentsSidebar({
     const chatIdsToArchive = Array.from(selectedChatIds)
     if (chatIdsToArchive.length === 0) return
 
+    // Separate remote and local chats
+    const remoteIds: string[] = []
+    const localIds: string[] = []
+    for (const chatId of chatIdsToArchive) {
+      const chat = agentChats?.find((c) => c.id === chatId)
+      if (chat?.isRemote) {
+        // Extract original ID from prefixed remote ID
+        remoteIds.push(chatId.replace(/^remote_/, ''))
+      } else {
+        localIds.push(chatId)
+      }
+    }
+
     // If active chat is being archived, navigate to previous or new workspace
     const isArchivingActiveChat =
       selectedChatId && chatIdsToArchive.includes(selectedChatId)
 
-    archiveChatsBatchMutation.mutate(
-      { chatIds: chatIdsToArchive },
-      {
-        onSuccess: () => {
-          if (isArchivingActiveChat) {
-            // Check if previous chat is available (exists and not being archived)
-            const remainingChats = filteredChats.filter(
-              (c) => !chatIdsToArchive.includes(c.id)
-            )
-            const isPreviousAvailable = previousChatId &&
-              remainingChats.some((c) => c.id === previousChatId)
+    const onSuccessCallback = () => {
+      if (isArchivingActiveChat) {
+        // Check if previous chat is available (exists and not being archived)
+        const remainingChats = filteredChats.filter(
+          (c) => !chatIdsToArchive.includes(c.id)
+        )
+        const isPreviousAvailable = previousChatId &&
+          remainingChats.some((c) => c.id === previousChatId)
 
-            if (isPreviousAvailable) {
-              setSelectedChatId(previousChatId)
-            } else {
-              setSelectedChatId(null)
-            }
-          }
-          clearChatSelection()
-        },
-      },
-    )
+        if (isPreviousAvailable) {
+          setSelectedChatId(previousChatId)
+        } else {
+          setSelectedChatId(null)
+        }
+      }
+      clearChatSelection()
+    }
+
+    // Track completions for combined callback
+    let completedCount = 0
+    const expectedCount = (remoteIds.length > 0 ? 1 : 0) + (localIds.length > 0 ? 1 : 0)
+
+    const handlePartialSuccess = (archivedIds: string[], isRemote: boolean) => {
+      // Add remote chats to undo stack
+      if (isRemote) {
+        const newItems: UndoItem[] = archivedIds.map((id) => {
+          const timeoutId = setTimeout(() => removeWorkspaceFromStack(`remote_${id}`), 10000)
+          return { type: "workspace" as const, chatId: `remote_${id}`, timeoutId, isRemote: true }
+        })
+        setUndoStack((prev) => [...prev, ...newItems])
+      }
+
+      completedCount++
+      if (completedCount === expectedCount) {
+        onSuccessCallback()
+      }
+    }
+
+    // Archive remote chats
+    if (remoteIds.length > 0) {
+      archiveRemoteChatsBatchMutation.mutate(remoteIds, {
+        onSuccess: () => handlePartialSuccess(remoteIds, true),
+      })
+    }
+
+    // Archive local chats
+    if (localIds.length > 0) {
+      archiveChatsBatchMutation.mutate({ chatIds: localIds }, {
+        onSuccess: () => handlePartialSuccess(localIds, false),
+      })
+    }
   }, [
     selectedChatIds,
     selectedChatId,
     previousChatId,
     filteredChats,
+    agentChats,
     archiveChatsBatchMutation,
+    archiveRemoteChatsBatchMutation,
     setSelectedChatId,
     clearChatSelection,
+    removeWorkspaceFromStack,
+    setUndoStack,
   ])
 
   const handleArchiveAllBelow = useCallback(
@@ -2004,28 +2372,74 @@ export function AgentsSidebar({
       if (currentIndex === -1 || currentIndex === filteredChats.length - 1)
         return
 
-      const chatsToArchive = filteredChats
-        .slice(currentIndex + 1)
-        .map((c) => c.id)
+      const chatsBelow = filteredChats.slice(currentIndex + 1)
 
-      if (chatsToArchive.length > 0) {
-        archiveChatsBatchMutation.mutate({ chatIds: chatsToArchive })
+      // Separate remote and local chats
+      const remoteIds: string[] = []
+      const localIds: string[] = []
+      for (const chat of chatsBelow) {
+        if (chat.isRemote) {
+          remoteIds.push(chat.id.replace(/^remote_/, ''))
+        } else {
+          localIds.push(chat.id)
+        }
+      }
+
+      // Archive remote chats
+      if (remoteIds.length > 0) {
+        archiveRemoteChatsBatchMutation.mutate(remoteIds, {
+          onSuccess: () => {
+            const newItems: UndoItem[] = remoteIds.map((id) => {
+              const timeoutId = setTimeout(() => removeWorkspaceFromStack(`remote_${id}`), 10000)
+              return { type: "workspace" as const, chatId: `remote_${id}`, timeoutId, isRemote: true }
+            })
+            setUndoStack((prev) => [...prev, ...newItems])
+          },
+        })
+      }
+
+      // Archive local chats
+      if (localIds.length > 0) {
+        archiveChatsBatchMutation.mutate({ chatIds: localIds })
       }
     },
-    [filteredChats, archiveChatsBatchMutation],
+    [filteredChats, archiveChatsBatchMutation, archiveRemoteChatsBatchMutation, removeWorkspaceFromStack, setUndoStack],
   )
 
   const handleArchiveOthers = useCallback(
     (chatId: string) => {
-      const chatsToArchive = filteredChats
-        .filter((c) => c.id !== chatId)
-        .map((c) => c.id)
+      const otherChats = filteredChats.filter((c) => c.id !== chatId)
 
-      if (chatsToArchive.length > 0) {
-        archiveChatsBatchMutation.mutate({ chatIds: chatsToArchive })
+      // Separate remote and local chats
+      const remoteIds: string[] = []
+      const localIds: string[] = []
+      for (const chat of otherChats) {
+        if (chat.isRemote) {
+          remoteIds.push(chat.id.replace(/^remote_/, ''))
+        } else {
+          localIds.push(chat.id)
+        }
+      }
+
+      // Archive remote chats
+      if (remoteIds.length > 0) {
+        archiveRemoteChatsBatchMutation.mutate(remoteIds, {
+          onSuccess: () => {
+            const newItems: UndoItem[] = remoteIds.map((id) => {
+              const timeoutId = setTimeout(() => removeWorkspaceFromStack(`remote_${id}`), 10000)
+              return { type: "workspace" as const, chatId: `remote_${id}`, timeoutId, isRemote: true }
+            })
+            setUndoStack((prev) => [...prev, ...newItems])
+          },
+        })
+      }
+
+      // Archive local chats
+      if (localIds.length > 0) {
+        archiveChatsBatchMutation.mutate({ chatIds: localIds })
       }
     },
-    [filteredChats, archiveChatsBatchMutation],
+    [filteredChats, archiveChatsBatchMutation, archiveRemoteChatsBatchMutation, removeWorkspaceFromStack, setUndoStack],
   )
 
   // Delete a draft from localStorage
@@ -2080,11 +2494,13 @@ export function AgentsSidebar({
     [loadingSubChats],
   )
 
-  // Convert file stats from DB to a Map for easy lookup
+  // Convert file stats to a Map for easy lookup (only for local chats)
+  // Remote chat stats are provided directly via chat.remoteStats
   const workspaceFileStats = useMemo(() => {
     const statsMap = new Map<string, { fileCount: number; additions: number; deletions: number }>()
+
+    // For local mode, use stats from DB query
     if (fileStatsData) {
-      
       for (const stat of fileStatsData) {
         statsMap.set(stat.chatId, {
           fileCount: stat.fileCount,
@@ -2093,6 +2509,7 @@ export function AgentsSidebar({
         })
       }
     }
+
     return statsMap
   }, [fileStatsData])
 
@@ -2121,6 +2538,7 @@ export function AgentsSidebar({
     setSelectedChatId(null)
     setSelectedDraftId(null) // Clear selected draft so form starts empty
     setShowNewChatForm(true) // Explicitly show new chat form
+    setDesktopView(null) // Clear automations/inbox view
     // On mobile, switch to chat mode to show NewChatForm
     if (isMobileFullscreen && onChatSelect) {
       onChatSelect()
@@ -2186,13 +2604,23 @@ export function AgentsSidebar({
 
     // In multi-select mode, clicking on the item still navigates to the chat
     // Only clicking on the checkbox toggles selection
-    setSelectedChatId(chatId)
+
+    // Check if this is a remote chat (has remote_ prefix)
+    const isRemote = chatId.startsWith('remote_')
+    // Extract original ID for remote chats
+    const originalId = isRemote ? chatId.replace(/^remote_/, '') : chatId
+
+    setSelectedChatId(originalId)
+    setSelectedChatIsRemote(isRemote)
+    // Sync chatSourceMode for ChatView to load data from correct source
+    setChatSourceMode(isRemote ? "sandbox" : "local")
     setShowNewChatForm(false) // Clear new chat form state when selecting a workspace
+    setDesktopView(null) // Clear automations/inbox view when selecting a chat
     // On mobile, notify parent to switch to chat mode
     if (isMobileFullscreen && onChatSelect) {
       onChatSelect()
     }
-  }, [filteredChats, selectedChatId, selectedChatIds, toggleChatSelection, setSelectedChatIds, setSelectedChatId, setShowNewChatForm, isMobileFullscreen, onChatSelect])
+  }, [filteredChats, selectedChatId, selectedChatIds, toggleChatSelection, setSelectedChatIds, setSelectedChatId, setSelectedChatIsRemote, setChatSourceMode, setShowNewChatForm, setDesktopView, isMobileFullscreen, onChatSelect])
 
   const handleCheckboxClick = useCallback((e: React.MouseEvent, chatId: string) => {
     e.stopPropagation()
@@ -2219,6 +2647,52 @@ export function AgentsSidebar({
   // Archive single chat - wrapped for memoized component
   // Checks for active terminal processes and worktree, shows confirmation dialog if needed
   const handleArchiveSingle = useCallback(async (chatId: string) => {
+    // Check if this specific chat is remote
+    const chat = agentChats?.find((c) => c.id === chatId)
+    const chatIsRemote = chat?.isRemote ?? false
+
+    // For remote chats, archive directly (no local processes/worktree to check)
+    if (chatIsRemote) {
+      // Extract original ID from prefixed remote ID (remove "remote_" prefix)
+      const originalId = chatId.replace(/^remote_/, '')
+      archiveRemoteChatMutation.mutate(originalId, {
+        onSuccess: () => {
+          // Handle navigation after archive (same logic as local)
+          if (selectedChatId === chatId) {
+            const currentIndex = agentChats?.findIndex((c) => c.id === chatId) ?? -1
+
+            if (autoAdvanceTarget === "next") {
+              const nextChat = agentChats?.find((c, i) => i > currentIndex && c.id !== chatId)
+              setSelectedChatId(nextChat?.id ?? null)
+            } else if (autoAdvanceTarget === "previous") {
+              const isPreviousAvailable = previousChatId &&
+                agentChats?.some((c) => c.id === previousChatId && c.id !== chatId)
+              setSelectedChatId(isPreviousAvailable ? previousChatId : null)
+            } else {
+              setSelectedChatId(null)
+            }
+          }
+
+          // Add to undo stack for Cmd+Z
+          const timeoutId = setTimeout(() => {
+            removeWorkspaceFromStack(chatId)
+          }, 10000)
+
+          setUndoStack((prev) => [...prev, {
+            type: "workspace",
+            chatId,
+            timeoutId,
+            isRemote: true,
+          }])
+        },
+        onError: (error) => {
+          console.error('[handleArchiveSingle] Failed to archive remote workspace:', error)
+          toast.error("Failed to archive workspace")
+        },
+      })
+      return
+    }
+
     // Fetch both session count and worktree status in parallel
     const [sessionCount, worktreeStatus] = await Promise.all([
       utils.terminal.getActiveSessionCount.fetch({ workspaceId: chatId }),
@@ -2238,7 +2712,19 @@ export function AgentsSidebar({
       // No active processes and no worktree, archive directly
       archiveChatMutation.mutate({ id: chatId })
     }
-  }, [archiveChatMutation, utils.terminal.getActiveSessionCount, utils.chats.getWorktreeStatus])
+  }, [
+    agentChats,
+    archiveRemoteChatMutation,
+    archiveChatMutation,
+    utils.terminal.getActiveSessionCount,
+    utils.chats.getWorktreeStatus,
+    selectedChatId,
+    autoAdvanceTarget,
+    previousChatId,
+    setSelectedChatId,
+    removeWorkspaceFromStack,
+    setUndoStack,
+  ])
 
   // Confirm archive after user accepts dialog (optimistic - closes immediately)
   const handleConfirmArchive = useCallback((deleteWorktree: boolean) => {
@@ -2253,6 +2739,44 @@ export function AgentsSidebar({
     setConfirmArchiveDialogOpen(false)
     setArchivingChatId(null)
   }, [])
+
+  // Handle open locally for sandbox chats
+  const handleOpenLocally = useCallback(
+    (chatId: string) => {
+      const remoteChat = remoteChats?.find((c) => c.id === chatId)
+      if (!remoteChat) return
+
+      const matchingProjects = getMatchingProjects(projects ?? [], remoteChat)
+
+      if (matchingProjects.length === 1) {
+        // Auto-import: single match found
+        autoImport(remoteChat, matchingProjects[0]!)
+      } else {
+        // Show dialog: 0 or 2+ matches
+        setImportingChatId(chatId)
+        setImportDialogOpen(true)
+      }
+    },
+    [remoteChats, projects, getMatchingProjects, autoImport]
+  )
+
+  // Close import sandbox dialog
+  const handleCloseImportDialog = useCallback(() => {
+    setImportDialogOpen(false)
+    setImportingChatId(null)
+  }, [])
+
+  // Get the remote chat for import dialog
+  const importingRemoteChat = useMemo(() => {
+    if (!importingChatId || !remoteChats) return null
+    return remoteChats.find((chat) => chat.id === importingChatId) ?? null
+  }, [importingChatId, remoteChats])
+
+  // Get matching projects for import dialog (only computed when dialog is open)
+  const importMatchingProjects = useMemo(() => {
+    if (!importingRemoteChat) return []
+    return getMatchingProjects(projects ?? [], importingRemoteChat)
+  }, [importingRemoteChat, projects, getMatchingProjects])
 
   // Copy branch name to clipboard
   const handleCopyBranch = useCallback((branch: string) => {
@@ -2273,6 +2797,14 @@ export function AgentsSidebar({
     (chatId: string, name: string | null, cardElement: HTMLElement, globalIndex: number) => {
       // Update hovered index ref
       hoveredChatIndexRef.current = globalIndex
+
+      // Prefetch chat data on hover (for remote chats, for instant load on click)
+      const chat = agentChats?.find((c) => c.id === chatId)
+      if (chat?.isRemote) {
+        const originalId = chatId.replace(/^remote_/, '')
+        prefetchRemoteChat(originalId)
+      }
+
       // Clear any existing timer
       if (agentTooltipTimerRef.current) {
         clearTimeout(agentTooltipTimerRef.current)
@@ -2297,7 +2829,7 @@ export function AgentsSidebar({
         tooltip.textContent = name || ""
       }, 1000)
     },
-    [],
+    [agentChats, prefetchRemoteChat],
   )
 
   const handleAgentMouseLeave = useCallback(() => {
@@ -2463,14 +2995,16 @@ export function AgentsSidebar({
 
         // If multi-select mode, bulk archive selected chats
         if (isMultiSelectMode && selectedChatIds.size > 0) {
-          if (!archiveChatsBatchMutation.isPending) {
+          const isPending = archiveRemoteChatsBatchMutation.isPending || archiveChatsBatchMutation.isPending
+          if (!isPending) {
             handleBulkArchive()
           }
           return
         }
 
         // Otherwise archive current chat (with confirmation if has active processes)
-        if (selectedChatId && !archiveChatMutation.isPending) {
+        const isPending = archiveRemoteChatMutation.isPending || archiveChatMutation.isPending
+        if (selectedChatId && !isPending) {
           handleArchiveSingle(selectedChatId)
         }
       }
@@ -2481,9 +3015,11 @@ export function AgentsSidebar({
   }, [
     selectedChatId,
     archiveChatMutation,
+    archiveRemoteChatMutation,
     isMultiSelectMode,
     selectedChatIds,
     archiveChatsBatchMutation,
+    archiveRemoteChatsBatchMutation,
     handleBulkArchive,
     handleArchiveSingle,
   ])
@@ -2625,12 +3161,23 @@ export function AgentsSidebar({
                 <span className="text-sm font-medium">New Workspace</span>
               </ButtonCustom>
             </TooltipTrigger>
-            <TooltipContent side="right">
-              Start a new workspace
-              {newWorkspaceHotkey && <Kbd>{newWorkspaceHotkey}</Kbd>}
+            <TooltipContent side="right" className="flex flex-col items-start gap-1">
+              <span>Start a new workspace</span>
+              {newWorkspaceHotkey && (
+                <span className="flex items-center gap-1.5">
+                  <Kbd>{newWorkspaceHotkey}</Kbd>
+                  {newWorkspaceAltHotkey && <><span className="text-[10px] opacity-50">or</span><Kbd>{newWorkspaceAltHotkey}</Kbd></>}
+                </span>
+              )}
             </TooltipContent>
           </Tooltip>
         </div>
+      </div>
+
+      {/* Navigation Links - Inbox & Automations */}
+      <div className="px-2 pb-3 flex-shrink-0 space-y-0.5 -mx-1">
+        <InboxButton />
+        <AutomationsButton />
       </div>
 
       {/* Scrollable Agents List */}
@@ -2643,7 +3190,7 @@ export function AgentsSidebar({
             isMultiSelectMode ? "px-0" : "px-2",
           )}
         >
-          {/* Drafts Section - always show if there are drafts */}
+          {/* Drafts Section - always show regardless of chat source mode */}
           {drafts.length > 0 && !searchQuery && (
             <div className={cn("mb-4", isMultiSelectMode ? "px-0" : "-mx-1")}>
               <div
@@ -2688,6 +3235,7 @@ export function AgentsSidebar({
                 title="Pinned workspaces"
                 chats={pinnedAgents}
                 selectedChatId={selectedChatId}
+                selectedChatIsRemote={selectedChatIsRemote}
                 focusedChatIndex={focusedChatIndex}
                 loadingChatIds={loadingChatIds}
                 unseenChanges={unseenChanges}
@@ -2714,11 +3262,12 @@ export function AgentsSidebar({
                 onCopyBranch={handleCopyBranch}
                 onArchiveAllBelow={handleArchiveAllBelow}
                 onArchiveOthers={handleArchiveOthers}
+                onOpenLocally={handleOpenLocally}
                 onBulkPin={handleBulkPin}
                 onBulkUnpin={handleBulkUnpin}
                 onBulkArchive={handleBulkArchive}
-                archivePending={archiveChatMutation.isPending}
-                archiveBatchPending={archiveChatsBatchMutation.isPending}
+                archivePending={archiveChatMutation.isPending || archiveRemoteChatMutation.isPending}
+                archiveBatchPending={archiveChatsBatchMutation.isPending || archiveRemoteChatsBatchMutation.isPending}
                 nameRefCallback={nameRefCallback}
                 formatTime={formatTime}
                 justCreatedIds={justCreatedIds}
@@ -2729,6 +3278,7 @@ export function AgentsSidebar({
                 title={pinnedAgents.length > 0 ? "Recent workspaces" : "Workspaces"}
                 chats={unpinnedAgents}
                 selectedChatId={selectedChatId}
+                selectedChatIsRemote={selectedChatIsRemote}
                 focusedChatIndex={focusedChatIndex}
                 loadingChatIds={loadingChatIds}
                 unseenChanges={unseenChanges}
@@ -2755,11 +3305,12 @@ export function AgentsSidebar({
                 onCopyBranch={handleCopyBranch}
                 onArchiveAllBelow={handleArchiveAllBelow}
                 onArchiveOthers={handleArchiveOthers}
+                onOpenLocally={handleOpenLocally}
                 onBulkPin={handleBulkPin}
                 onBulkUnpin={handleBulkUnpin}
                 onBulkArchive={handleBulkArchive}
-                archivePending={archiveChatMutation.isPending}
-                archiveBatchPending={archiveChatsBatchMutation.isPending}
+                archivePending={archiveChatMutation.isPending || archiveRemoteChatMutation.isPending}
+                archiveBatchPending={archiveChatsBatchMutation.isPending || archiveRemoteChatsBatchMutation.isPending}
                 nameRefCallback={nameRefCallback}
                 formatTime={formatTime}
                 justCreatedIds={justCreatedIds}
@@ -2928,6 +3479,16 @@ export function AgentsSidebar({
         activeProcessCount={activeProcessCount}
         hasWorktree={hasWorktree}
         uncommittedCount={uncommittedCount}
+      />
+
+      {/* Open Locally Dialog */}
+      <OpenLocallyDialog
+        isOpen={importDialogOpen}
+        onClose={handleCloseImportDialog}
+        remoteChat={importingRemoteChat}
+        matchingProjects={importMatchingProjects}
+        allProjects={projects ?? []}
+        remoteSubChatId={null}
       />
     </>
   )

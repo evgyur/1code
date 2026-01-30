@@ -1,5 +1,7 @@
+// Why Did You Render - MUST be first import (before React)
+import "./wdyr"
+
 // Only initialize Sentry in production if DSN is configured
-// This prevents IPC errors when Sentry is not properly set up
 if (import.meta.env.PROD && import.meta.env.VITE_SENTRY_DSN) {
   import("@sentry/electron/renderer")
     .then((Sentry) => {

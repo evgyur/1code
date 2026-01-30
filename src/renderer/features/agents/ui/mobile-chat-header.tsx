@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useState } from "react"
 import { useAtomValue } from "jotai"
 import { loadingSubChatsAtom } from "../atoms"
-import { Plus, ChevronDown, Play, AlignJustify } from "lucide-react"
+import { Plus, ChevronDown, Play, AlignJustify, FolderDown } from "lucide-react"
 import {
   IconSpinner,
   PlanIcon,
@@ -40,8 +40,11 @@ interface MobileChatHeaderProps {
   diffStats?: DiffStats
   onOpenTerminal?: () => void
   canOpenTerminal?: boolean
+  isTerminalOpen?: boolean
   isArchived?: boolean
   onRestore?: () => void
+  onOpenLocally?: () => void
+  showOpenLocally?: boolean
 }
 
 export function MobileChatHeader({
@@ -54,8 +57,11 @@ export function MobileChatHeader({
   diffStats,
   onOpenTerminal,
   canOpenTerminal = false,
+  isTerminalOpen = false,
   isArchived = false,
   onRestore,
+  onOpenLocally,
+  showOpenLocally = false,
 }: MobileChatHeaderProps) {
   const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
   const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
@@ -204,12 +210,25 @@ export function MobileChatHeader({
 
       {/* Action buttons - always on the right */}
       <div
-        className="flex items-center gap-0.5 flex-shrink-0"
+        className="flex items-center gap-1 flex-shrink-0"
         style={{
           // @ts-expect-error - WebKit-specific property
           WebkitAppRegion: "no-drag",
         }}
       >
+        {/* Open Locally - only for sandbox chats */}
+        {showOpenLocally && onOpenLocally && (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={onOpenLocally}
+            className="h-7 px-2.5 gap-1.5 text-xs font-medium"
+          >
+            <FolderDown className="h-3.5 w-3.5" />
+            Open Locally
+          </Button>
+        )}
+
         {/* Create new */}
         <Button
           variant="ghost"
@@ -220,8 +239,8 @@ export function MobileChatHeader({
           <Plus className="h-4 w-4" />
         </Button>
 
-        {/* Terminal button */}
-        {onOpenTerminal && canOpenTerminal && (
+        {/* Terminal button - hidden when terminal is already open */}
+        {onOpenTerminal && canOpenTerminal && !isTerminalOpen && (
           <Button
             variant="ghost"
             size="icon"
