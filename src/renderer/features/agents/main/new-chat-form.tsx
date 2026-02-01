@@ -110,7 +110,7 @@ import {
   markDraftVisible,
   type DraftProject,
 } from "../lib/drafts"
-import { CLAUDE_MODELS } from "../lib/models"
+import { CLAUDE_MODEL_IDS, CLAUDE_MODELS } from "../lib/models"
 // import type { PlanType } from "@/lib/config/subscription-plans"
 type PlanType = string
 
@@ -911,6 +911,9 @@ export function NewChatForm({
 
   // Open folder mutation for selecting a project
   const openFolder = trpc.projects.openFolder.useMutation({
+    onError: (error) => {
+      toast.error(error.message || "Could not open folder")
+    },
     onSuccess: (project) => {
       if (project) {
         // Optimistically update the projects list cache to prevent "Select repo" flash
@@ -1802,8 +1805,10 @@ export function NewChatForm({
                                   "Custom Model"
                                 ) : (
                                   <>
-                                    {selectedModel?.name}{" "}
-                                    <span className="text-muted-foreground">4.5</span>
+                                    {selectedModel?.name}
+                                    {selectedModel?.id && CLAUDE_MODEL_IDS.includes(selectedModel.id) ? (
+                                      <> <span className="text-muted-foreground">4.5</span></>
+                                    ) : null}
                                   </>
                                 )}
                               </span>
@@ -1825,8 +1830,10 @@ export function NewChatForm({
                                   <div className="flex items-center gap-1.5">
                                     <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                     <span>
-                                      {model.name}{" "}
-                                      <span className="text-muted-foreground">4.5</span>
+                                      {model.name}
+                                      {model.id && CLAUDE_MODEL_IDS.includes(model.id) ? (
+                                        <> <span className="text-muted-foreground">4.5</span></>
+                                      ) : null}
                                     </span>
                                   </div>
                                   {isSelected && (

@@ -3,6 +3,7 @@ import { router, publicProcedure } from "../index"
 import { getDatabase, projects } from "../../db"
 import { eq, desc } from "drizzle-orm"
 import { dialog, BrowserWindow, app } from "electron"
+import { platform } from "node:os"
 import { basename, join } from "path"
 import { exec } from "node:child_process"
 import { promisify } from "node:util"
@@ -12,8 +13,14 @@ import { extname } from "node:path"
 import { getGitRemoteInfo } from "../../git"
 import { trackProjectOpened } from "../../analytics"
 import { getLaunchDirectory } from "../../cli"
+import { windowManager } from "../../../windows/window-manager"
 
 const execAsync = promisify(exec)
+
+/** Get a window for modal dialogs; prefer focused, fallback to any window. */
+function getWindowForDialog(ctx: { getWindow?: () => BrowserWindow | null }): BrowserWindow | null {
+  return ctx.getWindow?.() ?? BrowserWindow.getFocusedWindow() ?? windowManager.getAll()[0] ?? null
+}
 
 export const projectsRouter = router({
   /**
@@ -46,26 +53,36 @@ export const projectsRouter = router({
    * Open folder picker and create project
    */
   openFolder: publicProcedure.mutation(async ({ ctx }) => {
-    const window = ctx.getWindow?.() ?? BrowserWindow.getFocusedWindow()
-
-    if (!window) {
+    const window = getWindowForDialog(ctx)
+    if (!window || window.isDestroyed()) {
       console.error("[Projects] No window available for folder dialog")
       return null
     }
 
-    // Ensure window is focused before showing dialog (fixes first-launch timing issue on macOS)
-    if (!window.isFocused()) {
-      console.log("[Projects] Window not focused, focusing before dialog...")
-      window.focus()
-      // Small delay to ensure focus is applied by the OS
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
-
-    const result = await dialog.showOpenDialog(window, {
-      properties: ["openDirectory", "createDirectory"],
+    const opts = {
+      properties: ["openDirectory", "createDirectory"] as const,
       title: "Select Project Folder",
       buttonLabel: "Open Project",
-    })
+    }
+
+    // Defer dialog to next tick so it opens after IPC handler settles (helps on Windows)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    window.focus()
+    const wasOnTop = window.isAlwaysOnTop()
+    if (platform() === "win32") {
+      window.setAlwaysOnTop(true, "floating")
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    let result: { canceled: boolean; filePaths: string[] }
+    try {
+      result = await dialog.showOpenDialog(window, opts)
+    } finally {
+      if (platform() === "win32" && !wasOnTop) {
+        window.setAlwaysOnTop(false)
+      }
+    }
 
     if (result.canceled || result.filePaths.length === 0) {
       return null
@@ -364,9 +381,9 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const window = ctx.getWindow?.() ?? BrowserWindow.getFocusedWindow()
+      const window = getWindowForDialog(ctx)
 
-      if (!window) {
+      if (!window || window.isDestroyed()) {
         return { success: false as const, reason: "no-window" as const }
       }
 
@@ -452,9 +469,9 @@ export const projectsRouter = router({
   pickCloneDestination: publicProcedure
     .input(z.object({ suggestedName: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const window = ctx.getWindow?.() ?? BrowserWindow.getFocusedWindow()
+      const window = getWindowForDialog(ctx)
 
-      if (!window) {
+      if (!window || window.isDestroyed()) {
         return { success: false as const, reason: "no-window" as const }
       }
 
@@ -490,8 +507,8 @@ export const projectsRouter = router({
   uploadIcon: publicProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const window = ctx.getWindow?.() ?? BrowserWindow.getFocusedWindow()
-      if (!window) return null
+      const window = getWindowForDialog(ctx)
+      if (!window || window.isDestroyed()) return null
 
       if (!window.isFocused()) {
         window.focus()

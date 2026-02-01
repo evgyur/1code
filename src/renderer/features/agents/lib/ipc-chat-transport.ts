@@ -9,6 +9,7 @@ import {
   enableTasksAtom,
   extendedThinkingEnabledAtom,
   historyEnabledAtom,
+  kimiConfigAtom,
   normalizeCustomClaudeConfig,
   selectedOllamaModelAtom,
   sessionInfoAtom,
@@ -180,7 +181,18 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const storedCustomConfig = appStore.get(
       customClaudeConfigAtom,
     ) as CustomClaudeConfig
-    const customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
+    let customConfig = normalizeCustomClaudeConfig(storedCustomConfig)
+    // When Kimi is selected, use Kimi config if API key is set (overrides legacy custom config for this request)
+    if (selectedModelId === "kimi") {
+      const kimiConfig = appStore.get(kimiConfigAtom)
+      if (kimiConfig?.apiKey?.trim()) {
+        customConfig = {
+          model: "kimi-for-coding",
+          token: kimiConfig.apiKey.trim(),
+          baseUrl: (kimiConfig.baseUrl || "https://api.kimi.com/coding/v1").trim(),
+        }
+      }
+    }
 
     // Get selected Ollama model for offline mode
     const selectedOllamaModel = appStore.get(selectedOllamaModelAtom)
@@ -388,8 +400,10 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                   },
                 )
 
-                // Build detailed error string for copying (available for ALL errors)
+                // Build detailed error string for copying (diagnostic first when present)
+                const diagnosticOutput = chunk.debugInfo?.diagnosticOutput
                 const errorDetails = [
+                  diagnosticOutput ? `Diagnostic (--version run):\n${diagnosticOutput}\n` : null,
                   `Error: ${chunk.errorText || "Unknown error"}`,
                   `Category: ${category}`,
                   `Chat ID: ${this.config.chatId}`,
@@ -403,16 +417,27 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // Show toast based on error category
                 const config = ERROR_TOAST_CONFIG[category]
                 const title = config?.title || "Claude error"
-                // Use config description if set, otherwise fall back to errorText
-                const rawDescription = config?.description || chunk.errorText || "An unexpected error occurred"
+                // Kimi 404: Kimi uses OpenAI-compatible API; 1Code uses Anthropic SDK → wrong endpoint
+                const isKimi404 =
+                  selectedModelId === "kimi" &&
+                  category === "SDK_ERROR" &&
+                  (chunk.errorText?.includes("404") || chunk.errorText?.includes("resource_not_found"))
+                const rawDescription = isKimi404
+                  ? "Kimi uses an OpenAI-compatible API (/chat/completions). 1Code uses the Anthropic SDK, which calls different endpoints, so Kimi returns 404. Use Kimi in Cursor or Claude Code (see kimi-integration-setup.md)."
+                  : (config?.description || chunk.errorText || "An unexpected error occurred")
                 // Truncate long descriptions for toast (keep first 300 chars)
-                const description = rawDescription.length > 300
+                let description = rawDescription.length > 300
                   ? rawDescription.slice(0, 300) + "..."
                   : rawDescription
+                // PROCESS_CRASH: longer toast and hint about Copy + main logs
+                const isProcessCrash = category === "PROCESS_CRASH"
+                if (isProcessCrash) {
+                  description += "\n\nClick Copy Error to copy full details (including diagnostic). Main process logs: run 1Code from a terminal (e.g. D:\\1code\\1Code.exe) to see them."
+                }
 
                 toast.error(title, {
                   description,
-                  duration: 12000,
+                  duration: isProcessCrash ? 20000 : 12000,
                   action: {
                     label: "Copy Error",
                     onClick: () => {

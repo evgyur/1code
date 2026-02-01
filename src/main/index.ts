@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/electron/main"
-import { app, BrowserWindow, Menu, session } from "electron"
+import { app, BrowserWindow, dialog, Menu, session } from "electron"
 import { existsSync, readFileSync, readlinkSync, unlinkSync } from "fs"
 import { createServer } from "http"
 import { join } from "path"
@@ -462,9 +462,30 @@ const server = createServer((req, res) => {
     }
   })
 
-server.listen(AUTH_SERVER_PORT, () => {
-  console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
-})
+// Listen only after we have the single-instance lock (see app.whenReady) so a second
+// instance never binds the port and avoids EADDRINUSE. reuseAddress helps when the
+// port is still in TIME_WAIT from a previous crash/restart.
+function startAuthServer(): void {
+  server
+    .listen(
+      { port: AUTH_SERVER_PORT, reuseAddress: true },
+      () => {
+        console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
+      },
+    )
+    .on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error("[Auth Server] Port", AUTH_SERVER_PORT, "already in use. Another 1Code instance may be running.")
+        dialog.showErrorBox(
+          "1Code",
+          `Port ${AUTH_SERVER_PORT} is already in use. Please close any other 1Code instance and try again.`,
+        )
+      } else {
+        console.error("[Auth Server] Failed to start:", err)
+      }
+      app.quit()
+    })
+}
 
 // Clean up stale lock files from crashed instances
 // Returns true if locks were cleaned, false otherwise
@@ -546,6 +567,9 @@ if (gotTheLock) {
 
   // App ready
   app.whenReady().then(async () => {
+    // Start auth server only in the single allowed instance (avoids EADDRINUSE on second launch)
+    startAuthServer()
+
     // Set dev mode app name (userData path was already set before requestSingleInstanceLock)
     if (IS_DEV) {
       app.name = "Agents Dev"

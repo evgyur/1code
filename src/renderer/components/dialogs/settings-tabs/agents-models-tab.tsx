@@ -6,6 +6,7 @@ import {
   agentsSettingsDialogOpenAtom,
   anthropicOnboardingCompletedAtom,
   customClaudeConfigAtom,
+  kimiConfigAtom,
   openaiApiKeyAtom,
   type CustomClaudeConfig,
 } from "../../../lib/atoms"
@@ -43,6 +44,99 @@ const EMPTY_CONFIG: CustomClaudeConfig = {
   token: "",
   baseUrl: "",
 }
+
+const KIMI_DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1"
+
+function KimiConfigSection() {
+  const [storedKimi, setStoredKimi] = useAtom(kimiConfigAtom)
+  const [apiKey, setApiKey] = useState(storedKimi.apiKey)
+  const [baseUrl, setBaseUrl] = useState(storedKimi.baseUrl || KIMI_DEFAULT_BASE_URL)
+
+  useEffect(() => {
+    setApiKey(storedKimi.apiKey)
+    setBaseUrl(storedKimi.baseUrl || KIMI_DEFAULT_BASE_URL)
+  }, [storedKimi.apiKey, storedKimi.baseUrl])
+
+  const trimmedKey = apiKey.trim()
+  const trimmedBaseUrl = baseUrl.trim()
+  const canSave = trimmedKey !== storedKimi.apiKey || trimmedBaseUrl !== (storedKimi.baseUrl || KIMI_DEFAULT_BASE_URL)
+  const canReset = !!trimmedKey || (trimmedBaseUrl && trimmedBaseUrl !== KIMI_DEFAULT_BASE_URL)
+
+  const handleSave = () => {
+    setStoredKimi({
+      apiKey: trimmedKey,
+      baseUrl: trimmedBaseUrl || KIMI_DEFAULT_BASE_URL,
+    })
+    toast.success("Kimi settings saved")
+  }
+
+  const handleReset = () => {
+    setStoredKimi({ apiKey: "", baseUrl: KIMI_DEFAULT_BASE_URL })
+    setApiKey("")
+    setBaseUrl(KIMI_DEFAULT_BASE_URL)
+    toast.success("Kimi settings reset")
+  }
+
+  return (
+      <div className="space-y-2">
+        <div className="pb-2">
+          <h4 className="text-sm font-medium text-foreground">Kimi (for Coding)</h4>
+          <p className="text-xs text-muted-foreground">
+            Used when &quot;Kimi&quot; is selected in the model dropdown alongside Opus/Sonnet/Haiku.
+          </p>
+          <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+            Note: Kimi uses an OpenAI-compatible API. 1Code uses the Anthropic SDK, so you may get 404 when using Kimi here. For full Kimi support use Cursor or Claude Code (see kimi-integration-setup.md).
+          </p>
+        </div>
+      <div className="bg-background rounded-lg border border-border overflow-hidden">
+        <div className="p-4 space-y-4">
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex-1">
+              <Label className="text-sm font-medium">API Key</Label>
+              <p className="text-xs text-muted-foreground">
+                Kimi API key (sk-kimi-...)
+              </p>
+            </div>
+            <div className="flex-shrink-0 w-80">
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                className="w-full"
+                placeholder="sk-kimi-..."
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex-1">
+              <Label className="text-sm font-medium">Base URL</Label>
+              <p className="text-xs text-muted-foreground">
+                Optional; default: api.kimi.com/coding/v1
+              </p>
+            </div>
+            <div className="flex-shrink-0 w-80">
+              <Input
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                className="w-full"
+                placeholder={KIMI_DEFAULT_BASE_URL}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="bg-muted p-3 rounded-b-lg flex justify-end gap-2 border-t">
+          <Button variant="ghost" size="sm" onClick={handleReset} disabled={!canReset} className="hover:bg-red-500/10 hover:text-red-600">
+            Reset
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={!canSave}>
+            Save
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 // Account row component
 function AccountRow({
@@ -467,6 +561,9 @@ export function AgentsModelsTab() {
 
         </div>
       </div>
+
+      {/* Kimi (for Coding) - used when "Kimi" is selected in the model dropdown */}
+      <KimiConfigSection />
 
       {/* OpenAI API Key for Voice Input */}
       <div className="space-y-2">

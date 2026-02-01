@@ -61,7 +61,7 @@ import {
   clearSubChatDraft,
   saveSubChatDraftWithAttachments,
 } from "../lib/drafts"
-import { CLAUDE_MODELS } from "../lib/models"
+import { CLAUDE_MODEL_IDS, CLAUDE_MODELS } from "../lib/models"
 import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
 import {
   AgentsFileMention,
@@ -1381,8 +1381,10 @@ export const ChatInputArea = memo(function ChatInputArea({
                               "Custom Model"
                             ) : (
                               <>
-                                {selectedModel?.name}{" "}
-                                <span className="text-muted-foreground">4.5</span>
+                                {selectedModel?.name}
+                                {selectedModel?.id && CLAUDE_MODEL_IDS.includes(selectedModel.id) ? (
+                                  <> <span className="text-muted-foreground">4.5</span></>
+                                ) : null}
                               </>
                             )}
                           </span>
@@ -1404,8 +1406,10 @@ export const ChatInputArea = memo(function ChatInputArea({
                               <div className="flex items-center gap-1.5">
                                 <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                 <span>
-                                  {model.name}{" "}
-                                  <span className="text-muted-foreground">4.5</span>
+                                  {model.name}
+                                  {model.id && CLAUDE_MODEL_IDS.includes(model.id) ? (
+                                    <> <span className="text-muted-foreground">4.5</span></>
+                                  ) : null}
                                 </span>
                               </div>
                               {isSelected && (

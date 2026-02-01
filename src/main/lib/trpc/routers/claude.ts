@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process"
 import { observable } from "@trpc/server/observable"
 import { eq } from "drizzle-orm"
 import { app, BrowserWindow, safeStorage } from "electron"
@@ -688,7 +689,20 @@ export const claudeRouter = router({
           }
           
           try {
-            const cwdStat = await fs.stat(resolvedCwd)
+            let cwdStat: Awaited<ReturnType<typeof fs.stat>>
+            try {
+              cwdStat = await fs.stat(resolvedCwd)
+            } catch (firstStatError) {
+              // UNC/WSL paths (\\wsl...) can be slow to respond; retry once before giving up
+              const isUnc = resolvedCwd.startsWith("\\\\")
+              if (isUnc) {
+                console.error(`[BACKEND] UNC path stat failed, retrying in 500ms...`)
+                await new Promise((r) => setTimeout(r, 500))
+                cwdStat = await fs.stat(resolvedCwd)
+              } else {
+                throw firstStatError
+              }
+            }
             if (!cwdStat.isDirectory()) {
               console.error(`[BACKEND] ✗ CWD VALIDATION FAILED: Not a directory`)
               emitError(new Error(`CWD is not a directory: ${resolvedCwd}`), "Invalid workspace path")
@@ -733,10 +747,19 @@ export const claudeRouter = router({
             } catch (fallbackError) {
               const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
               console.error(`[BACKEND] ✗ Fallback failed: ${fallbackMsg}`)
-              emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}\n\nWorktree may have been deleted. Please recreate the workspace.`), "Workspace path error")
-              safeEmit({ type: "finish" } as UIMessageChunk)
-              safeComplete()
-              return
+              // Last resort: use home directory so the user can still send messages (e.g. WSL path inaccessible from Windows)
+              const homeDir = os.homedir()
+              const homeAccessible = await fs.stat(homeDir).then(() => true).catch(() => false)
+              if (homeAccessible) {
+                console.error(`[BACKEND] Using home directory as last resort (original CWD was missing/inaccessible): ${homeDir}`)
+                resolvedCwd = homeDir
+                input.cwd = homeDir
+              } else {
+                emitError(new Error(`CWD does not exist or is inaccessible: ${resolvedCwd} (original: ${input.cwd}) - ${errorMsg}\n\nWorktree may have been deleted. Please recreate the workspace.`), "Workspace path error")
+                safeEmit({ type: "finish" } as UIMessageChunk)
+                safeComplete()
+                return
+              }
             }
           }
           
@@ -1139,7 +1162,8 @@ export const claudeRouter = router({
             const resumeSessionId = input.sessionId || existingSessionId || undefined
 
             // DEBUG: Session resume path tracing
-            const expectedSanitizedCwd = input.cwd.replace(/[/.]/g, "-")
+            // Sanitize cwd so it's safe as a path segment (no absolute path on Windows: C:\... would break path.join)
+            const expectedSanitizedCwd = input.cwd.replace(/[/\\.:]/g, "-")
             const expectedSessionPath = path.join(isolatedConfigDir, "projects", expectedSanitizedCwd, `${resumeSessionId}.jsonl`)
             console.log(`[claude] ========== SESSION DEBUG ==========`)
             console.log(`[claude] subChatId: ${input.subChatId}`)
@@ -2071,6 +2095,37 @@ ${prompt}
                 errorCategory = "NETWORK_ERROR"
               }
 
+              // When process crashed with no stderr, run binary once with --version to capture stdout/stderr for debugging
+              let diagnosticOutput: string | undefined
+              if (errorCategory === "PROCESS_CRASH" && !stderrOutput?.trim()) {
+                try {
+                  diagnosticOutput = await new Promise<string>((resolve) => {
+                    const child = spawn(claudeBinaryPath, ["--version"], {
+                      cwd: input.cwd,
+                      env: finalEnv,
+                      stdio: ["ignore", "pipe", "pipe"],
+                    })
+                    let out = ""
+                    let err = ""
+                    child.stdout?.on("data", (d: Buffer) => { out += d.toString() })
+                    child.stderr?.on("data", (d: Buffer) => { err += d.toString() })
+                    child.on("close", (code) => {
+                      resolve(`exitCode=${code}\nstdout:\n${out}\nstderr:\n${err}`)
+                    })
+                    child.on("error", (e) => {
+                      resolve(`spawn error: ${e.message}`)
+                    })
+                    setTimeout(() => {
+                      try { child.kill() } catch { /* already dead */ }
+                      resolve(`timeout\nstdout:\n${out}\nstderr:\n${err}`)
+                    }, 5000)
+                  })
+                  console.error("[claude] PROCESS_CRASH diagnostic (--version):", diagnosticOutput)
+                } catch (e) {
+                  diagnosticOutput = e instanceof Error ? e.message : String(e)
+                }
+              }
+
               // Track error in Sentry (only if app is ready and Sentry is available)
               if (app.isReady() && app.isPackaged) {
                 try {
@@ -2084,6 +2139,7 @@ ${prompt}
                       context: errorContext,
                       cwd: input.cwd,
                       stderr: stderrOutput || "(no stderr captured)",
+                      ...(diagnosticOutput && { diagnosticOutput }),
                       chatId: input.chatId,
                       subChatId: input.subChatId,
                     },
@@ -2106,6 +2162,7 @@ ${prompt}
                     cwd: input.cwd,
                     mode: input.mode,
                     stderr: stderrOutput || "(no stderr captured)",
+                    ...(diagnosticOutput && { diagnosticOutput }),
                   },
                 } as UIMessageChunk)
               }

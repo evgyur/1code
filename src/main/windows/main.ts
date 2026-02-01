@@ -577,8 +577,8 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
       ipcHandler = createIPCHandler({
         router: createAppRouter(getWindow),
         windows: [window],
-        createContext: async () => ({
-          getWindow,
+        createContext: async ({ event }) => ({
+          getWindow: () => getWindowFromEvent(event) ?? getWindow(),
         }),
       })
     }
@@ -587,8 +587,8 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     ipcHandler = createIPCHandler({
       router: createAppRouter(getWindow),
       windows: [window],
-      createContext: async () => ({
-        getWindow,
+      createContext: async ({ event }) => ({
+        getWindow: () => getWindowFromEvent(event) ?? getWindow(),
       }),
     })
   }

@@ -262,6 +262,16 @@ export const customClaudeConfigAtom = atomWithStorage<CustomClaudeConfig>(
   { getOnInit: true },
 )
 
+// Kimi (for Coding) config - used when model "Kimi" is selected in the model dropdown
+const KIMI_DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1"
+export type KimiConfig = { apiKey: string; baseUrl: string }
+export const kimiConfigAtom = atomWithStorage<KimiConfig>(
+  "agents:kimi-config",
+  { apiKey: "", baseUrl: KIMI_DEFAULT_BASE_URL },
+  undefined,
+  { getOnInit: true },
+)
+
 // OpenAI API key for voice transcription (for users without paid subscription)
 export const openaiApiKeyAtom = atomWithStorage<string>(
   "agents:openai-api-key",

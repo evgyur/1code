@@ -24,6 +24,7 @@ import { Button } from "../../../components/ui/button"
 import { IconChevronDown, CheckIcon, FolderPlusIcon, GitHubIcon } from "../../../components/ui/icons"
 import { ProjectIcon } from "../../../components/ui/project-icon"
 import { trpc } from "../../../lib/trpc"
+import { toast } from "sonner"
 import { selectedProjectAtom } from "../atoms"
 
 export function ProjectSelector() {
@@ -53,6 +54,9 @@ export function ProjectSelector() {
 
   // Open folder mutation
   const openFolder = trpc.projects.openFolder.useMutation({
+    onError: (error) => {
+      toast.error(error.message || "Could not open folder")
+    },
     onSuccess: (project) => {
       if (project) {
         // Optimistically update the projects list cache to prevent validation failures

@@ -8,6 +8,7 @@ import { IconSpinner, GitHubIcon } from "../../components/ui/icons"
 import { Logo } from "../../components/ui/logo"
 import { Input } from "../../components/ui/input"
 import { trpc } from "../../lib/trpc"
+import { toast } from "sonner"
 import { selectedProjectAtom } from "../agents/atoms"
 
 export function SelectRepoPage() {
@@ -20,6 +21,9 @@ export function SelectRepoPage() {
 
   // Open folder mutation
   const openFolder = trpc.projects.openFolder.useMutation({
+    onError: (error) => {
+      toast.error(error.message || "Could not open folder")
+    },
     onSuccess: (project) => {
       if (project) {
         // Optimistically update the projects list cache

@@ -347,11 +347,12 @@ const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
   </svg>
 )
 
-// Model options for Claude Code
+// Model options for Claude Code (includes Kimi when selected from dropdown)
 const claudeModels = [
   { id: "opus", name: "Opus" },
   { id: "sonnet", name: "Sonnet" },
   { id: "haiku", name: "Haiku" },
+  { id: "kimi", name: "Kimi" },
 ]
 
 // Agent providers

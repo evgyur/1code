@@ -237,11 +237,12 @@ export const subChatModeAtomFamily = atomFamily((subChatId: string) =>
   ),
 )
 
-// Model ID to full Claude model string mapping
+// Model ID to full API model string mapping
 export const MODEL_ID_MAP: Record<string, string> = {
   opus: "opus",
   sonnet: "sonnet",
   haiku: "haiku",
+  kimi: "kimi-for-coding",
 }
 
 // Sidebar state - window-scoped so each window has independent sidebar visibility
