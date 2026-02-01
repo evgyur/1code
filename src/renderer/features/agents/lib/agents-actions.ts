@@ -23,7 +23,6 @@ export interface AgentActionContext {
 
   // UI states
   setSidebarOpen?: (open: boolean | ((prev: boolean) => boolean)) => void
-  setSettingsDialogOpen?: (open: boolean) => void
   setSettingsActiveTab?: (tab: SettingsTab) => void
   setFileSearchDialogOpen?: (open: boolean) => void
   toggleChatSearch?: () => void
@@ -63,9 +62,10 @@ const openShortcutsAction: AgentActionDefinition = {
   category: "general",
   hotkey: "?",
   handler: async (context) => {
-    // Open settings dialog on Keyboard tab instead of separate shortcuts dialog
+    // Open settings page on Keyboard tab
     context.setSettingsActiveTab?.("keyboard")
-    context.setSettingsDialogOpen?.(true)
+    context.setDesktopView?.("settings")
+    context.setSidebarOpen?.(true)
     return { success: true }
   },
 }
@@ -93,12 +93,13 @@ const createNewAgentAction: AgentActionDefinition = {
 const openSettingsAction: AgentActionDefinition = {
   id: "open-settings",
   label: "Settings",
-  description: "Open settings dialog",
+  description: "Open settings page",
   category: "general",
   hotkey: ["cmd+,", "ctrl+,"],
   handler: async (context) => {
-    context.setSettingsActiveTab?.("profile")
-    context.setSettingsDialogOpen?.(true)
+    context.setSettingsActiveTab?.("preferences")
+    context.setDesktopView?.("settings")
+    context.setSidebarOpen?.(true)
     return { success: true }
   },
 }

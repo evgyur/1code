@@ -60,13 +60,25 @@ export function createTransformer(options?: { emitSdkMessageUuid?: boolean; isUs
     if (currentToolCallId) {
       // Track this tool ID to avoid duplicates from assistant message
       emittedToolIds.add(currentToolCallId)
-      
+
+      let parsedInput = {}
+      if (accumulatedToolInput) {
+        try {
+          parsedInput = JSON.parse(accumulatedToolInput)
+        } catch (e) {
+          // Stream may have been interrupted mid-JSON (e.g. network error, abort)
+          // resulting in incomplete JSON like '{"prompt":"write co'
+          console.error("[transform] Failed to parse tool input JSON:", (e as Error).message, "partial:", accumulatedToolInput.slice(0, 120))
+          parsedInput = { _raw: accumulatedToolInput, _parseError: true }
+        }
+      }
+
       // Emit complete tool call with accumulated input
       yield {
         type: "tool-input-available",
         toolCallId: currentToolCallId,
         toolName: currentToolName || "unknown",
-        input: accumulatedToolInput ? JSON.parse(accumulatedToolInput) : {},
+        input: parsedInput,
       }
       currentToolCallId = null
       currentToolName = null
@@ -414,7 +426,7 @@ export function createTransformer(options?: { emitSdkMessageUuid?: boolean; isUs
         })
         // Map MCP servers with validated status type and additional info
         const mcpServers: MCPServer[] = (msg.mcp_servers || []).map(
-          (s: { name: string; status: string; serverInfo?: { name: string; version: string }; error?: string }) => ({
+          (s: { name: string; status: string; serverInfo?: { name: string; version: string; icons?: { src: string; mimeType?: string; sizes?: string[]; theme?: "light" | "dark" }[] }; error?: string }) => ({
             name: s.name,
             status: (["connected", "failed", "pending", "needs-auth"].includes(
               s.status,
@@ -458,56 +470,67 @@ export function createTransformer(options?: { emitSdkMessageUuid?: boolean; isUs
 
     // ===== RESULT (final) =====
     if (msg.type === "result") {
-      console.log("[transform] RESULT message, textStarted:", textStarted, "lastTextId:", lastTextId)
       yield* endTextBlock()
       yield* endToolInput()
 
       // Extract token usage - check multiple possible locations and field names
       const usage = msg.usage || (msg as any).usage_info
-      const modelUsage = (msg as any).modelUsage
-      
-      // modelUsage is an object where keys are model names and values contain inputTokens/outputTokens
-      // We need to sum up tokens across all models
+      const rawModelUsage = (msg as any).modelUsage
+
+      // Sum tokens from modelUsage if present
       let inputTokens: number | undefined = undefined
       let outputTokens: number | undefined = undefined
-      
-      if (modelUsage && typeof modelUsage === 'object') {
-        // Sum tokens from all models in modelUsage
-        let totalInputTokens = 0
-        let totalOutputTokens = 0
-        for (const modelName in modelUsage) {
-          const modelData = modelUsage[modelName]
-          if (modelData && typeof modelData === 'object') {
-            totalInputTokens += modelData.inputTokens ?? modelData.input_tokens ?? 0
-            totalOutputTokens += modelData.outputTokens ?? modelData.output_tokens ?? 0
+      if (rawModelUsage && typeof rawModelUsage === "object") {
+        let totalInput = 0
+        let totalOutput = 0
+        for (const modelName in rawModelUsage) {
+          const modelData = rawModelUsage[modelName]
+          if (modelData && typeof modelData === "object") {
+            totalInput += modelData.inputTokens ?? modelData.input_tokens ?? 0
+            totalOutput += modelData.outputTokens ?? modelData.output_tokens ?? 0
           }
         }
-        if (totalInputTokens > 0 || totalOutputTokens > 0) {
-          inputTokens = totalInputTokens
-          outputTokens = totalOutputTokens
+        if (totalInput > 0 || totalOutput > 0) {
+          inputTokens = totalInput
+          outputTokens = totalOutput
         }
       }
-      
-      // Fallback to usage object if modelUsage didn't provide tokens
       if (inputTokens === undefined) {
-        inputTokens = 
-          usage?.input_tokens ?? 
-          usage?.inputTokens ?? 
-          (msg as any).input_tokens ?? 
-          (msg as any).inputTokens ?? 
+        inputTokens =
+          usage?.input_tokens ??
+          usage?.inputTokens ??
+          (msg as any).input_tokens ??
+          (msg as any).inputTokens ??
           undefined
       }
       if (outputTokens === undefined) {
-        outputTokens = 
-          usage?.output_tokens ?? 
-          usage?.outputTokens ?? 
-          (msg as any).output_tokens ?? 
-          (msg as any).outputTokens ?? 
+        outputTokens =
+          usage?.output_tokens ??
+          usage?.outputTokens ??
+          (msg as any).output_tokens ??
+          (msg as any).outputTokens ??
           undefined
       }
-      
+
+      // Per-model usage from SDK (upstream shape)
+      const modelUsage = msg.modelUsage
+        ? Object.fromEntries(
+            Object.entries(msg.modelUsage).map(([model, u]: [string, any]) => [
+              model,
+              {
+                inputTokens: u.inputTokens ?? u.input_tokens ?? 0,
+                outputTokens: u.outputTokens ?? u.output_tokens ?? 0,
+                cacheReadInputTokens: u.cacheReadInputTokens || 0,
+                cacheCreationInputTokens: u.cacheCreationInputTokens || 0,
+                costUSD: u.costUSD || 0,
+              },
+            ])
+          )
+        : undefined
+
       const metadata: MessageMetadata = {
         sessionId: msg.session_id,
+        sdkMessageUuid: emitSdkMessageUuid ? msg.uuid : undefined,
         inputTokens: inputTokens ?? 0,
         outputTokens: outputTokens ?? 0,
         totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) > 0 ? (inputTokens ?? 0) + (outputTokens ?? 0) : undefined,
@@ -516,10 +539,11 @@ export function createTransformer(options?: { emitSdkMessageUuid?: boolean; isUs
         resultSubtype: msg.subtype || "success",
         // Include finalTextId for collapsing tools when there's a final response
         finalTextId: lastTextId || undefined,
+        // Per-model usage breakdown
+        modelUsage,
       }
       yield { type: "message-metadata", messageMetadata: metadata }
       yield { type: "finish-step" }
-      console.log("[transform] YIELDING FINISH from result message")
       yield { type: "finish", messageMetadata: metadata }
     }
   }

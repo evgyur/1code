@@ -1,5 +1,5 @@
 import { clipboard, shell } from "electron";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
@@ -81,19 +81,24 @@ export const externalRouter = router({
 			}),
 		)
 		.mutation(async ({ input }) => {
-			const { path, cwd } = input;
+			const { cwd } = input;
+			const filePath = input.path.startsWith("~")
+				? input.path.replace("~", os.homedir())
+				: input.path;
 
 			// Try common code editors in order of preference
 			const editors = [
-				{ cmd: "code", args: [path] }, // VS Code
-				{ cmd: "cursor", args: [path] }, // Cursor
-				{ cmd: "subl", args: [path] }, // Sublime Text
-				{ cmd: "atom", args: [path] }, // Atom
-				{ cmd: "open", args: ["-t", path] }, // macOS default text editor
+				{ cmd: "cursor", args: [filePath] }, // Cursor
+				{ cmd: "code", args: [filePath] }, // VS Code
+				{ cmd: "subl", args: [filePath] }, // Sublime Text
+				{ cmd: "atom", args: [filePath] }, // Atom
+				{ cmd: "open", args: ["-t", filePath] }, // macOS default text editor
 			];
 
 			for (const editor of editors) {
 				try {
+					// Check if the command exists first
+					execFileSync("which", [editor.cmd], { stdio: "ignore" });
 					const child = spawn(editor.cmd, editor.args, {
 						cwd: cwd || undefined,
 						detached: true,
@@ -108,7 +113,7 @@ export const externalRouter = router({
 			}
 
 			// Fallback: use shell.openPath which opens with default app
-			await shell.openPath(path);
+			await shell.openPath(filePath);
 			return { success: true, editor: "default" };
 		}),
 

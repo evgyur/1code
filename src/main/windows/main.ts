@@ -540,8 +540,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     title: "1Code",
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#09090b" : "#ffffff",
     // hiddenInset shows native traffic lights inset in the window
-    // Start with traffic lights off-screen (custom ones shown in normal mode)
-    // Native lights will be moved on-screen in fullscreen mode
+    // hiddenInset hides the native title bar but keeps traffic lights visible
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     trafficLightPosition:
       process.platform === "darwin" ? { x: 15, y: 12 } : undefined,
@@ -597,7 +596,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   // Show window when ready
   window.on("ready-to-show", () => {
     console.log("[Main] Window", window.id, "ready to show")
-    // Ensure native traffic lights are visible by default (login page, loading states)
+    // Always show native macOS traffic lights
     if (process.platform === "darwin") {
       window.setWindowButtonVisibility(true)
     }
@@ -613,7 +612,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     window.webContents.send("window:fullscreen-change", true)
   })
   window.on("leave-full-screen", () => {
-    // Show native traffic lights when exiting fullscreen (TrafficLights component will manage after mount)
+    // Show native traffic lights when exiting fullscreen
     if (process.platform === "darwin") {
       window.setWindowButtonVisibility(true)
     }
@@ -703,7 +702,7 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
     }
   }
 
-  // Ensure traffic lights are visible after page load (covers reload/Cmd+R case)
+  // Ensure native traffic lights are visible after page load
   window.webContents.on("did-finish-load", () => {
     console.log("[Main] Page finished loading in window", window.id)
     if (process.platform === "darwin") {

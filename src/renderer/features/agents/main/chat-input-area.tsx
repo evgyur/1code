@@ -1,7 +1,7 @@
 "use client"
 
-import { useAtom, useAtomValue } from "jotai"
-import { ChevronDown, Zap } from "lucide-react"
+import { useAtom, useAtomValue, useSetAtom } from "jotai"
+import { ChevronDown, Loader2, RefreshCw, Zap } from "lucide-react"
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
@@ -18,7 +18,9 @@ import {
   AttachIcon,
   CheckIcon,
   ClaudeCodeIcon,
+  OriginalMCPIcon,
   PlanIcon,
+  SettingsIcon,
   ThinkingIcon,
 } from "../../../components/ui/icons"
 import { Kbd } from "../../../components/ui/kbd"
@@ -29,12 +31,24 @@ import {
 } from "../../../components/ui/prompt-input"
 import { Switch } from "../../../components/ui/switch"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../../../components/ui/tooltip"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../../../components/ui/popover"
+import {
+  agentsSettingsDialogActiveTabAtom,
+  agentsSettingsDialogOpenAtom,
   autoOfflineModeAtom,
   customClaudeConfigAtom,
   extendedThinkingEnabledAtom,
   normalizeCustomClaudeConfig,
   selectedOllamaModelAtom,
-  showOfflineModeFeaturesAtom
+  showOfflineModeFeaturesAtom,
 } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
@@ -62,6 +76,7 @@ import { AgentImageItem } from "../ui/agent-image-item"
 import { AgentPastedTextItem } from "../ui/agent-pasted-text-item"
 import { AgentTextContextItem } from "../ui/agent-text-context-item"
 import { VoiceWaveIndicator } from "../ui/voice-wave-indicator"
+import { McpStatusDot } from "../../../components/dialogs/settings-tabs/agents-mcp-tab"
 import { handlePasteEvent } from "../utils/paste-text"
 import type { PastedTextFile } from "../hooks/use-pasted-text-files"
 import {
@@ -426,6 +441,55 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Extended thinking (reasoning) toggle
   const [thinkingEnabled, setThinkingEnabled] = useAtom(extendedThinkingEnabledAtom)
+
+  // MCP status - from getAllMcpConfig query (provides global/local grouping)
+  const setSettingsOpen = useSetAtom(agentsSettingsDialogOpenAtom)
+  const setSettingsTab = useSetAtom(agentsSettingsDialogActiveTabAtom)
+
+  const {
+    data: allMcpConfig,
+    isLoading: isMcpLoading,
+    refetch: refetchMcp,
+  } = trpc.claude.getAllMcpConfig.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const [isMcpRefreshing, setIsMcpRefreshing] = useState(false)
+  const isMcpBusy = isMcpLoading || isMcpRefreshing
+
+  const handleRefreshMcp = useCallback(async () => {
+    setIsMcpRefreshing(true)
+    try {
+      await refetchMcp()
+    } finally {
+      setIsMcpRefreshing(false)
+    }
+  }, [refetchMcp])
+
+  // Extract global MCPs and project-specific MCPs
+  const mcpGroups = useMemo(() => {
+    if (!allMcpConfig?.groups) return { global: [], local: [] }
+
+    const globalGroup = allMcpConfig.groups.find((g) => g.groupName === "Global")
+    const localGroup = allMcpConfig.groups.find(
+      (g) => g.projectPath && projectPath && g.projectPath === projectPath,
+    )
+
+    return {
+      global: globalGroup?.mcpServers || [],
+      local: localGroup?.mcpServers || [],
+    }
+  }, [allMcpConfig?.groups, projectPath])
+
+  const totalMcps = mcpGroups.global.length + mcpGroups.local.length
+  const connectedMcps =
+    mcpGroups.global.filter((s) => s.status === "connected").length +
+    mcpGroups.local.filter((s) => s.status === "connected").length
+
+  const handleOpenMcpSettings = useCallback(() => {
+    setSettingsTab("mcp")
+    setSettingsOpen(true)
+  }, [setSettingsTab, setSettingsOpen])
 
   // Auto-switch model based on network status (only if offline features enabled)
   // Note: When offline, we show Ollama models selector instead of Claude models
@@ -1368,6 +1432,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
+
                 </div>
 
                 <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">

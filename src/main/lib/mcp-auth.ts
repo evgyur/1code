@@ -11,6 +11,7 @@ import {
 } from './claude-config';
 import { getClaudeShellEnvironment } from './claude/env';
 import { CraftOAuth, fetchOAuthMetadata, getMcpBaseUrl, type OAuthMetadata, type OAuthTokens } from './oauth';
+import { discoverPluginMcpServers } from './plugins';
 import { bringToFront } from './window';
 
 
@@ -19,10 +20,15 @@ import { bringToFront } from './window';
  * @param serverUrl The MCP server URL
  * @param accessToken Optional access token (not needed for public MCPs)
  */
+export interface McpToolInfo {
+  name: string;
+  description?: string;
+}
+
 export async function fetchMcpTools(
   serverUrl: string,
   headers?: Record<string, string>
-): Promise<string[]> {
+): Promise<McpToolInfo[]> {
   let client: Client | null = null;
   let transport: StreamableHTTPClientTransport | null = null;
 
@@ -47,7 +53,7 @@ export async function fetchMcpTools(
     const tools = result.tools || [];
 
     console.log(`[MCP] Fetched ${tools.length} tools via SDK`);
-    return tools.map(t => t.name);
+    return tools.map(t => ({ name: t.name, description: t.description }));
   } catch (error) {
     console.error('[MCP] Failed to fetch tools:', error);
     return [];
@@ -85,7 +91,7 @@ export async function fetchMcpToolsStdio(config: {
   command: string;
   args?: string[];
   env?: Record<string, string>;
-}): Promise<string[]> {
+}): Promise<McpToolInfo[]> {
   let transport: StdioClientTransport | null = null;
 
   try {
@@ -118,7 +124,7 @@ export async function fetchMcpToolsStdio(config: {
     const tools = result.tools || [];
 
     console.log(`[MCP] Fetched ${tools.length} tools via stdio`);
-    return tools.map(t => t.name);
+    return tools.map(t => ({ name: t.name, description: t.description }));
   } catch (error) {
     console.error('[MCP] Failed to fetch tools via stdio:', error);
     return [];
@@ -167,7 +173,26 @@ export async function startMcpOAuth(
 ): Promise<{ success: boolean; error?: string }> {
   // 1. Read server config from ~/.claude.json
   const config = await readClaudeConfig();
-  const serverConfig = getMcpServerConfig(config, projectPath, serverName);
+  let serverConfig = getMcpServerConfig(config, projectPath, serverName);
+
+  // Fallback: check plugin MCP servers if not found in ~/.claude.json
+  if (!serverConfig?.url) {
+    const pluginMcpConfigs = await discoverPluginMcpServers();
+    for (const pluginConfig of pluginMcpConfigs) {
+      if (pluginConfig.mcpServers[serverName]) {
+        serverConfig = pluginConfig.mcpServers[serverName];
+        // Save plugin server config to ~/.claude.json so token storage works
+        await updateClaudeConfigAtomic((cfg) => {
+          return updateMcpServerConfig(cfg, GLOBAL_MCP_PATH, serverName, {
+            url: serverConfig!.url,
+            type: serverConfig!.url?.endsWith('/sse') ? 'sse' : 'http',
+            authType: 'oauth',
+          });
+        });
+        break;
+      }
+    }
+  }
 
   if (!serverConfig?.url) {
     return { success: false, error: `MCP server "${serverName}" URL not configured` };

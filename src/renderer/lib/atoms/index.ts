@@ -1,5 +1,6 @@
 import { atom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
+import { desktopViewAtom as _desktopViewAtom } from "../../features/agents/atoms"
 
 // ============================================
 // RE-EXPORT FROM FEATURES/AGENTS/ATOMS (source of truth)
@@ -188,13 +189,20 @@ export type SettingsTab =
   | "skills"
   | "agents"
   | "mcp"
+  | "plugins"
   | "worktrees"
+  | "projects"
   | "debug"
   | "beta"
   | "keyboard"
-  | `project-${string}` // Dynamic project tabs
-export const agentsSettingsDialogActiveTabAtom = atom<SettingsTab>("profile")
-export const agentsSettingsDialogOpenAtom = atom<boolean>(false)
+export const agentsSettingsDialogActiveTabAtom = atom<SettingsTab>("preferences")
+// Derived atom: maps settings open/close to desktopView navigation
+export const agentsSettingsDialogOpenAtom = atom(
+  (get) => get(_desktopViewAtom) === "settings",
+  (_get, set, open: boolean) => {
+    set(_desktopViewAtom, open ? "settings" : null)
+  }
+)
 
 export type CustomClaudeConfig = {
   model: string
@@ -441,6 +449,15 @@ export const betaAutomationsEnabledAtom = atomWithStorage<boolean>(
 export const enableTasksAtom = atomWithStorage<boolean>(
   "preferences:enable-tasks",
   true, // Default ON
+  undefined,
+  { getOnInit: true },
+)
+
+// Beta: Enable Early Access Updates
+// When enabled, the app checks for beta releases in addition to stable releases
+export const betaUpdatesEnabledAtom = atomWithStorage<boolean>(
+  "preferences:beta-updates-enabled",
+  false, // Default OFF - only stable releases
   undefined,
   { getOnInit: true },
 )
@@ -742,12 +759,20 @@ export const apiKeyOnboardingCompletedAtom = atomWithStorage<boolean>(
 
 export type MCPServerStatus = "connected" | "failed" | "pending" | "needs-auth"
 
+export type MCPServerIcon = {
+  src: string
+  mimeType?: string
+  sizes?: string[]
+  theme?: "light" | "dark"
+}
+
 export type MCPServer = {
   name: string
   status: MCPServerStatus
   serverInfo?: {
     name: string
     version: string
+    icons?: MCPServerIcon[]
   }
   error?: string
 }
@@ -804,3 +829,20 @@ export const preferredEditorAtom = atomWithStorage<ExternalApp>(
   undefined,
   { getOnInit: true },
 )
+
+// ============================================
+// MCP APPROVAL DIALOG ATOMS
+// ============================================
+
+export type PendingMcpApproval = {
+  pluginSource: string
+  serverName: string
+  identifier: string
+  config: Record<string, unknown>
+}
+
+// Whether the MCP approval dialog is open
+export const mcpApprovalDialogOpenAtom = atom<boolean>(false)
+
+// Pending MCP approvals to show in the dialog
+export const pendingMcpApprovalsAtom = atom<PendingMcpApproval[]>([])

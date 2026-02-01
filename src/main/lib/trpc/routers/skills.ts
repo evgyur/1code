@@ -4,27 +4,32 @@ import * as fs from "fs/promises"
 import * as path from "path"
 import * as os from "os"
 import matter from "gray-matter"
+import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
+import { getEnabledPlugins } from "./claude-settings"
 
-interface FileSkill {
+export interface FileSkill {
   name: string
   description: string
-  source: "user" | "project"
+  source: "user" | "project" | "plugin"
+  pluginName?: string
   path: string
+  content: string
 }
 
 /**
  * Parse SKILL.md frontmatter to extract name and description
  */
-function parseSkillMd(content: string): { name?: string; description?: string } {
+function parseSkillMd(rawContent: string): { name?: string; description?: string; content: string } {
   try {
-    const { data } = matter(content)
+    const { data, content } = matter(rawContent)
     return {
       name: typeof data.name === "string" ? data.name : undefined,
       description: typeof data.description === "string" ? data.description : undefined,
+      content: content.trim(),
     }
   } catch (err) {
     console.error("[skills] Failed to parse frontmatter:", err)
-    return {}
+    return { content: rawContent.trim() }
   }
 }
 
@@ -33,7 +38,7 @@ function parseSkillMd(content: string): { name?: string; description?: string } 
  */
 async function scanSkillsDirectory(
   dir: string,
-  source: "user" | "project",
+  source: "user" | "project" | "plugin",
   basePath?: string, // For project skills, the cwd to make paths relative to
 ): Promise<FileSkill[]> {
   const skills: FileSkill[] = []
@@ -93,6 +98,7 @@ async function scanSkillsDirectory(
           description: parsed.description || "",
           source,
           path: displayPath,
+          content: parsed.content,
         })
       } catch (err) {
         // Skill directory doesn't have SKILL.md or read failed - skip it
@@ -124,14 +130,57 @@ const listSkillsProcedure = publicProcedure
       projectSkillsPromise = scanSkillsDirectory(projectSkillsDir, "project", input.cwd)
     }
 
-    // Scan both directories in parallel
-    const [userSkills, projectSkills] = await Promise.all([
-      userSkillsPromise,
-      projectSkillsPromise,
+    // Discover plugin skills
+    const [enabledPluginSources, installedPlugins] = await Promise.all([
+      getEnabledPlugins(),
+      discoverInstalledPlugins(),
     ])
+    const enabledPlugins = installedPlugins.filter(
+      (p) => enabledPluginSources.includes(p.source),
+    )
+    const pluginSkillsPromises = enabledPlugins.map(async (plugin) => {
+      const paths = getPluginComponentPaths(plugin)
+      try {
+        const skills = await scanSkillsDirectory(paths.skills, "plugin")
+        return skills.map((skill) => ({ ...skill, pluginName: plugin.source }))
+      } catch {
+        return []
+      }
+    })
 
-    return [...projectSkills, ...userSkills]
+    // Scan all directories in parallel
+    const [userSkills, projectSkills, ...pluginSkillsArrays] =
+      await Promise.all([
+        userSkillsPromise,
+        projectSkillsPromise,
+        ...pluginSkillsPromises,
+      ])
+    const pluginSkills = pluginSkillsArrays.flat()
+
+    return [...projectSkills, ...userSkills, ...pluginSkills]
   })
+
+/**
+ * Generate SKILL.md content from name, description, and body
+ */
+function generateSkillMd(skill: { name: string; description: string; content: string }): string {
+  const frontmatter: string[] = []
+  frontmatter.push(`name: ${skill.name}`)
+  if (skill.description) {
+    frontmatter.push(`description: ${skill.description}`)
+  }
+  return `---\n${frontmatter.join("\n")}\n---\n\n${skill.content}`
+}
+
+/**
+ * Resolve the absolute filesystem path of a skill given its display path
+ */
+function resolveSkillPath(displayPath: string): string {
+  if (displayPath.startsWith("~")) {
+    return path.join(os.homedir(), displayPath.slice(1))
+  }
+  return displayPath
+}
 
 export const skillsRouter = router({
   /**
@@ -145,4 +194,96 @@ export const skillsRouter = router({
    * Alias for list - used by @ mention
    */
   listEnabled: listSkillsProcedure,
+
+  /**
+   * Create a new skill
+   */
+  create: publicProcedure
+    .input(
+      z.object({
+        name: z.string(),
+        description: z.string(),
+        content: z.string(),
+        source: z.enum(["user", "project"]),
+        cwd: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const safeName = input.name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "")
+      if (!safeName) {
+        throw new Error("Skill name must contain at least one alphanumeric character")
+      }
+
+      let targetDir: string
+      if (input.source === "project") {
+        if (!input.cwd) {
+          throw new Error("Project path (cwd) required for project skills")
+        }
+        targetDir = path.join(input.cwd, ".claude", "skills")
+      } else {
+        targetDir = path.join(os.homedir(), ".claude", "skills")
+      }
+
+      const skillDir = path.join(targetDir, safeName)
+      const skillMdPath = path.join(skillDir, "SKILL.md")
+
+      // Check if already exists
+      try {
+        await fs.access(skillMdPath)
+        throw new Error(`Skill "${safeName}" already exists`)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err
+        }
+      }
+
+      // Create directory and write SKILL.md
+      await fs.mkdir(skillDir, { recursive: true })
+
+      const fileContent = generateSkillMd({
+        name: safeName,
+        description: input.description,
+        content: input.content,
+      })
+
+      await fs.writeFile(skillMdPath, fileContent, "utf-8")
+
+      return {
+        name: safeName,
+        path: skillMdPath,
+        source: input.source,
+      }
+    }),
+
+  /**
+   * Update a skill's SKILL.md content
+   */
+  update: publicProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        name: z.string(),
+        description: z.string(),
+        content: z.string(),
+        cwd: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const absolutePath = input.cwd && !input.path.startsWith("~") && !input.path.startsWith("/")
+        ? path.join(input.cwd, input.path)
+        : resolveSkillPath(input.path)
+
+      // Verify file exists before writing
+      await fs.access(absolutePath)
+
+      const fileContent = generateSkillMd({
+        name: input.name,
+        description: input.description,
+        content: input.content,
+      })
+
+      await fs.writeFile(absolutePath, fileContent, "utf-8")
+
+      return { success: true }
+    }),
 })

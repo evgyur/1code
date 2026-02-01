@@ -11,7 +11,7 @@ import {
   autoAdvanceTargetAtom,
   createTeamDialogOpenAtom,
   agentsSettingsDialogActiveTabAtom,
-  agentsSettingsDialogOpenAtom,
+  agentsSidebarOpenAtom,
   agentsHelpPopoverOpenAtom,
   selectedAgentChatIdsAtom,
   isAgentMultiSelectModeAtom,
@@ -1194,7 +1194,7 @@ const AutomationsButton = memo(function AutomationsButton() {
   const automationsEnabled = useAtomValue(betaAutomationsEnabledAtom)
 
   const handleClick = useCallback(() => {
-    window.desktopApi.openExternal("https://21st.dev/agents/app/async/automations")
+    window.desktopApi.openExternal("https://21st.dev/agents/app/automations")
   }, [])
 
   if (!automationsEnabled) return null
@@ -1313,12 +1313,11 @@ const SidebarHeader = memo(function SidebarHeader({
         />
       )}
 
-      {/* Custom traffic lights - positioned at top left, centered in 32px area */}
+      {/* No-drag zone over native traffic lights */}
       <TrafficLights
-        isHovered={isDropdownOpen}
         isFullscreen={isFullscreen}
         isDesktop={isDesktop}
-        className="absolute left-4 top-[14px] z-20"
+        className="absolute left-[15px] top-[12px] z-20"
       />
 
       {/* Close button - positioned at top right */}
@@ -1430,7 +1429,7 @@ const SidebarHeader = memo(function SidebarHeader({
                       className="gap-2"
                       onSelect={() => {
                         setIsDropdownOpen(false)
-                        setSettingsActiveTab("profile")
+                        setSettingsActiveTab("preferences")
                         setSettingsDialogOpen(true)
                       }}
                     >
@@ -1699,8 +1698,9 @@ export function AgentsSidebar({
   // Haptic feedback
   const { trigger: triggerHaptic } = useHaptic()
 
-  // Resolved hotkey for tooltip
+  // Resolved hotkeys for tooltips
   const { primary: newWorkspaceHotkey, alt: newWorkspaceAltHotkey } = useResolvedHotkeyDisplayWithAlt("new-workspace")
+  const settingsHotkey = useResolvedHotkeyDisplay("open-settings")
 
   // Rename dialog state
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
@@ -1736,8 +1736,18 @@ export function AgentsSidebar({
     null,
   )
 
-  const setSettingsDialogOpen = useSetAtom(agentsSettingsDialogOpenAtom)
   const setSettingsActiveTab = useSetAtom(agentsSettingsDialogActiveTabAtom)
+  const setDesktopViewForSettings = useSetAtom(desktopViewAtom)
+  const setSidebarOpenForSettings = useSetAtom(agentsSidebarOpenAtom)
+  // Navigate to settings page instead of opening a dialog
+  const setSettingsDialogOpen = useCallback((open: boolean) => {
+    if (open) {
+      setDesktopViewForSettings("settings")
+      setSidebarOpenForSettings(true)
+    } else {
+      setDesktopViewForSettings(null)
+    }
+  }, [setDesktopViewForSettings, setSidebarOpenForSettings])
   const { isLoaded: isAuthLoaded } = useCombinedAuth()
   const [showAuthDialog, setShowAuthDialog] = useState(false)
   const setCreateTeamDialogOpen = useSetAtom(createTeamDialogOpenAtom)
@@ -2847,16 +2857,14 @@ export function AgentsSidebar({
     }
   }, [])
 
+  // Update sidebar hover UI - DOM manipulation for close button, state for TrafficLights
+  // TrafficLights component handles native traffic light visibility via its own effect
   // Update sidebar hover UI via DOM manipulation (no state update to avoid re-renders)
   const updateSidebarHoverUI = useCallback((hovered: boolean) => {
     isSidebarHoveredRef.current = hovered
     // Update close button opacity
     if (closeButtonRef.current) {
       closeButtonRef.current.style.opacity = hovered ? "1" : "0"
-    }
-    // Update native traffic light visibility
-    if (typeof window !== "undefined" && window.desktopApi?.setTrafficLightVisibility) {
-      window.desktopApi.setTrafficLightVisibility(hovered)
     }
   }, [])
 
@@ -3396,7 +3404,7 @@ export function AgentsSidebar({
                     <button
                       type="button"
                       onClick={() => {
-                        setSettingsActiveTab("profile")
+                        setSettingsActiveTab("preferences")
                         setSettingsDialogOpen(true)
                       }}
                       className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
@@ -3404,7 +3412,7 @@ export function AgentsSidebar({
                       <SettingsIcon className="h-4 w-4" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>Settings</TooltipContent>
+                  <TooltipContent>Settings{settingsHotkey && <> <Kbd>{settingsHotkey}</Kbd></>}</TooltipContent>
                 </Tooltip>
 
                 {/* Help Button - isolated component to prevent sidebar re-renders */}

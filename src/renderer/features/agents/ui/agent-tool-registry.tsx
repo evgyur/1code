@@ -33,7 +33,7 @@ export interface ToolMeta {
   icon: React.ComponentType<{ className?: string }>
   title: (part: any) => string
   subtitle?: (part: any) => string
-  tooltipContent?: (part: any) => string
+  tooltipContent?: (part: any, projectPath?: string) => string
   variant: ToolVariant
 }
 
@@ -55,8 +55,16 @@ export function getToolStatus(part: any, chatStatus?: string) {
 }
 
 // Utility to get clean display path (remove sandbox/worktree/absolute prefixes)
-function getDisplayPath(filePath: string): string {
+// projectPath: optional absolute path to the project root, used to compute relative paths
+export function getDisplayPath(filePath: string, projectPath?: string): string {
   if (!filePath) return ""
+
+  // If projectPath is provided, strip it to get a project-relative path
+  if (projectPath && filePath.startsWith(projectPath)) {
+    const relative = filePath.slice(projectPath.length).replace(/^\//, "")
+    return relative || filePath.split("/").pop() || filePath
+  }
+
   const prefixes = [
     "/project/sandbox/repo/",
     "/project/sandbox/",
@@ -228,10 +236,10 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
       if (!filePath) return "" // Don't show "file" placeholder during streaming
       return filePath.split("/").pop() || ""
     },
-    tooltipContent: (part) => {
+    tooltipContent: (part, projectPath) => {
       if (part.state === "input-streaming") return ""
       const filePath = part.input?.file_path || ""
-      return getDisplayPath(filePath)
+      return getDisplayPath(filePath, projectPath)
     },
     variant: "simple",
   },

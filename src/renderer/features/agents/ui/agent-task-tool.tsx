@@ -1,8 +1,10 @@
 "use client"
 
 import { memo, useState, useEffect, useRef } from "react"
+import { useAtomValue } from "jotai"
 import { ChevronRight } from "lucide-react"
 import { useFileOpen } from "../mentions"
+import { selectedProjectAtom } from "../atoms"
 import { AgentToolRegistry, getToolStatus } from "./agent-tool-registry"
 import { AgentToolCall } from "./agent-tool-call"
 import { AgentToolInterrupted } from "./agent-tool-interrupted"
@@ -36,6 +38,8 @@ export const AgentTaskTool = memo(function AgentTaskTool({
   nestedTools,
   chatStatus,
 }: AgentTaskToolProps) {
+  const selectedProject = useAtomValue(selectedProjectAtom)
+  const projectPath = selectedProject?.path
   const { isPending, isInterrupted } = getToolStatus(part, chatStatus)
   const onOpenFile = useFileOpen()
 
@@ -198,7 +202,7 @@ export const AgentTaskTool = memo(function AgentTaskTool({
                   icon={nestedMeta.icon}
                   title={nestedMeta.title(nestedPart)}
                   subtitle={nestedMeta.subtitle?.(nestedPart)}
-                  tooltipContent={nestedMeta.tooltipContent?.(nestedPart)}
+                  tooltipContent={nestedMeta.tooltipContent?.(nestedPart, projectPath)}
                   isPending={nestedIsPending}
                   isError={nestedIsError}
                   onClick={handleClick}

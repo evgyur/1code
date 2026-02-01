@@ -109,7 +109,6 @@ export interface AgentsHotkeysManagerConfig {
   setShowNewChatForm?: (show: boolean) => void
   setDesktopView?: (view: import("../atoms").DesktopView) => void
   setSidebarOpen?: (open: boolean | ((prev: boolean) => boolean)) => void
-  setSettingsDialogOpen?: (open: boolean) => void
   setSettingsActiveTab?: (tab: SettingsTab) => void
   setFileSearchDialogOpen?: (open: boolean) => void
   toggleChatSearch?: () => void
@@ -144,7 +143,6 @@ export function useAgentsHotkeys(
       setShowNewChatForm: config.setShowNewChatForm,
       setDesktopView: config.setDesktopView,
       setSidebarOpen: config.setSidebarOpen,
-      setSettingsDialogOpen: config.setSettingsDialogOpen,
       setSettingsActiveTab: config.setSettingsActiveTab,
       setFileSearchDialogOpen: config.setFileSearchDialogOpen,
       toggleChatSearch: config.toggleChatSearch,
@@ -156,7 +154,6 @@ export function useAgentsHotkeys(
       config.setShowNewChatForm,
       config.setDesktopView,
       config.setSidebarOpen,
-      config.setSettingsDialogOpen,
       config.setSettingsActiveTab,
       config.setFileSearchDialogOpen,
       config.toggleChatSearch,

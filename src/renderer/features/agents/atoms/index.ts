@@ -1,6 +1,7 @@
 import { atom } from "jotai"
 import { atomFamily, atomWithStorage } from "jotai/utils"
 import { atomWithWindowStorage } from "../../../lib/window-storage"
+import type { FileMentionOption } from "../mentions/agents-mentions-editor"
 
 // Agent mode type - extensible for future modes like "debug"
 export type AgentMode = "agent" | "plan"
@@ -43,6 +44,13 @@ export const selectedDraftIdAtom = atom<string | null>(null)
 // Set to false when kanban is explicitly opened (via hotkey or button)
 // Set to true when "New Workspace" is clicked
 export const showNewChatFormAtom = atom<boolean>(true)
+
+// When true, suppress auto-focus on chat input (e.g. during sidebar keyboard navigation)
+export const suppressInputFocusAtom = atom<boolean>(false)
+
+// Pending mention to insert into the editor from external components (e.g. MCP widget in sidebar)
+// When set, active-chat picks it up, calls editorRef.insertMention(), and resets to null
+export const pendingMentionAtom = atom<FileMentionOption | null>(null)
 
 // Preview paths storage - stores all preview paths keyed by chatId
 const previewPathsStorageAtom = atomWithStorage<Record<string, string>>(
@@ -860,7 +868,7 @@ export const showMessageJsonAtom = atomWithStorage<boolean>(
 
 // Desktop view mode - takes priority over chat-based rendering
 // null = default behavior (chat/new-chat/kanban)
-export type DesktopView = "automations" | "automations-detail" | "inbox" | null
+export type DesktopView = "automations" | "automations-detail" | "inbox" | "settings" | null
 export const desktopViewAtom = atom<DesktopView>(null)
 
 // Which automation is being viewed/edited (ID or "new" for creation)
@@ -889,6 +897,15 @@ export const agentsInboxSidebarWidthAtom = atomWithStorage<number>(
 // Inbox mobile view mode
 export type InboxMobileViewMode = "list" | "chat"
 export const inboxMobileViewModeAtom = atom<InboxMobileViewMode>("list")
+
+// Settings inner sidebar widths (for MCP, Skills, Agents two-panel layouts)
+// Non-persisted — resets to default on re-render
+export const settingsMcpSidebarWidthAtom = atom(240)
+export const settingsSkillsSidebarWidthAtom = atom(240)
+export const settingsAgentsSidebarWidthAtom = atom(240)
+export const settingsPluginsSidebarWidthAtom = atom(240)
+export const settingsKeyboardSidebarWidthAtom = atom(240)
+export const settingsProjectsSidebarWidthAtom = atom(240)
 
 // File viewer display mode - sidebar (side peek), center dialog, or fullscreen
 export type FileViewerDisplayMode = "side-peek" | "center-peek" | "full-page"

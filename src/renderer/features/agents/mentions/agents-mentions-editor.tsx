@@ -17,7 +17,7 @@ import { createFileIconElement } from "./agents-file-mention"
 const LARGE_TEXT_THRESHOLD = 10000
 
 export interface FileMentionOption {
-  id: string // file:owner/repo:path/to/file.tsx or folder:owner/repo:path/to/folder or skill:skill-name or tool:mcp-tool-name
+  id: string // file:owner/repo:path/to/file.tsx or folder:owner/repo:path/to/folder or skill:skill-name or tool:servername
   label: string // filename or folder name or skill name or tool name
   path: string // full path or skill description
   repository: string
@@ -232,16 +232,20 @@ function buildContentFromSerialized(
       option = { id, label: agentName, path: "", repository: "", type: "agent" }
     }
     if (!option && id.startsWith(MENTION_PREFIXES.TOOL)) {
-      // Parse tool mention: tool:mcp__servername__toolname
       const toolPath = id.slice(MENTION_PREFIXES.TOOL.length)
-      // Extract readable name from tool path (e.g., mcp__figma__get_design -> Get design)
-      const parts = toolPath.split("__")
-      const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
-      const displayName = toolName
-        .replace(/_/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase())
-        .trim()
-      option = { id, label: displayName, path: toolPath, repository: "", type: "tool" }
+      if (toolPath.startsWith("mcp__")) {
+        // Individual tool: tool:mcp__servername__toolname
+        const parts = toolPath.split("__")
+        const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
+        const displayName = toolName
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase())
+          .trim()
+        option = { id, label: displayName, path: toolPath, repository: "", type: "tool" }
+      } else {
+        // MCP server: tool:servername
+        option = { id, label: toolPath, path: toolPath, repository: "", type: "tool" }
+      }
     }
     if (option) {
       root.appendChild(createMentionNode(option))
@@ -700,14 +704,16 @@ export const AgentsMentionsEditor = memo(
           }
           if (id.startsWith(MENTION_PREFIXES.TOOL)) {
             const toolPath = id.slice(MENTION_PREFIXES.TOOL.length)
-            // Extract readable name from tool path (e.g., mcp__figma__get_design -> Get design)
-            const parts = toolPath.split("__")
-            const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
-            const displayName = toolName
-              .replace(/_/g, " ")
-              .replace(/\b\w/g, (c) => c.toUpperCase())
-              .trim()
-            return { id, label: displayName, path: toolPath, repository: "", type: "tool" }
+            if (toolPath.startsWith("mcp__")) {
+              const parts = toolPath.split("__")
+              const toolName = parts.length >= 3 ? parts.slice(2).join("__") : toolPath
+              const displayName = toolName
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, (c) => c.toUpperCase())
+                .trim()
+              return { id, label: displayName, path: toolPath, repository: "", type: "tool" }
+            }
+            return { id, label: toolPath, path: toolPath, repository: "", type: "tool" }
           }
           return null
         },
@@ -1307,14 +1313,34 @@ export const AgentsMentionsEditor = memo(
               triggerStartIndex.current = null
               onCloseTrigger()
             }
-            // Case 2: Direct insertion (e.g., drag & drop) - just insert at end
+            // Case 2: Direct insertion (e.g., from sidebar widget, drag & drop)
             else {
               const mentionNode = createMentionNode(option)
               const space = document.createTextNode(" ")
 
-              // Append to editor content
-              editorRef.current.appendChild(mentionNode)
-              editorRef.current.appendChild(space)
+              // Try to insert at current cursor position if it's inside the editor
+              const editorEl = editorRef.current
+              let inserted = false
+
+              if (range && editorEl.contains(range.startContainer)) {
+                range.collapse(false)
+                range.insertNode(space)
+                range.insertNode(mentionNode)
+                inserted = true
+              }
+
+              // Fallback: insert at end of the last text/inline content
+              if (!inserted) {
+                // Find the deepest last child to append inline (avoid new-line from div siblings)
+                let target: Node = editorEl
+                while (target.lastChild && target.lastChild.nodeType === Node.ELEMENT_NODE) {
+                  const el = target.lastChild as HTMLElement
+                  if (el.hasAttribute("data-mention-id") || el.tagName === "BR") break
+                  target = el
+                }
+                target.appendChild(mentionNode)
+                target.appendChild(space)
+              }
 
               // Move cursor after the space
               const newRange = document.createRange()

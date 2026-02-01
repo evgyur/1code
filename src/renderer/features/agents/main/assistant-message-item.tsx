@@ -8,7 +8,7 @@ import { CollapseIcon, ExpandIcon, IconTextUndo, PlanIcon } from "../../../compo
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
 import { isRollingBackAtom, rollbackHandlerAtom } from "../stores/message-store"
-import { showMessageJsonAtom } from "../atoms"
+import { selectedProjectAtom, showMessageJsonAtom } from "../atoms"
 import { MessageJsonDisplay } from "../ui/message-json-display"
 import { AgentAskUserQuestionTool } from "../ui/agent-ask-user-question-tool"
 import { AgentBashTool } from "../ui/agent-bash-tool"
@@ -279,6 +279,8 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   const onRollback = useAtomValue(rollbackHandlerAtom)
   const isRollingBack = useAtomValue(isRollingBackAtom)
   const showMessageJson = useAtomValue(showMessageJsonAtom)
+  const selectedProject = useAtomValue(selectedProjectAtom)
+  const projectPath = selectedProject?.path
   const onOpenFile = useFileOpen()
   const isDev = import.meta.env.DEV
   const messageParts = message?.parts || []
@@ -589,7 +591,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           icon={meta.icon}
           title={meta.title(part)}
           subtitle={meta.subtitle?.(part)}
-          tooltipContent={meta.tooltipContent?.(part)}
+          tooltipContent={meta.tooltipContent?.(part, projectPath)}
           isPending={isPending}
           isError={isError}
           onClick={handleClick}
