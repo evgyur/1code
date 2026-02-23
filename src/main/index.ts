@@ -32,6 +32,7 @@ import { getAllMcpConfigHandler } from "./lib/trpc/routers/claude"
 import { getAllCodexMcpConfigHandler } from "./lib/trpc/routers/codex"
 import {
   createMainWindow,
+  registerIpcHandlersEarly,
   createWindow,
   getWindow,
   getAllWindows,
@@ -282,9 +283,13 @@ console.log("[Protocol] =============================================")
 const FAVICON_SVG = `<svg width="32" height="32" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="1024" height="1024" fill="#0033FF"/><path fill-rule="evenodd" clip-rule="evenodd" d="M800.165 148C842.048 148 876 181.952 876 223.835V686.415C876 690.606 872.606 694 868.415 694H640.915C636.729 694 633.335 697.394 633.335 701.585V868.415C633.335 872.606 629.936 876 625.75 876H223.835C181.952 876 148 842.048 148 800.165V702.59C148 697.262 150.807 692.326 155.376 689.586L427.843 526.1C434.031 522.388 431.956 513.238 425.327 512.118L423.962 512H155.585C151.394 512 148 508.606 148 504.415V337.585C148 333.394 151.394 330 155.585 330H443.75C447.936 330 451.335 326.606 451.335 322.415V155.585C451.335 151.394 454.729 148 458.915 148H800.165ZM458.915 330C454.729 330 451.335 333.394 451.335 337.585V686.415C451.335 690.606 454.729 694 458.915 694H625.75C629.936 694 633.335 690.606 633.335 686.415V337.585C633.335 333.394 629.936 330 625.75 330H458.915Z" fill="#F4F4F4"/></svg>`
 const FAVICON_DATA_URI = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`
 
-// Start local HTTP server for auth callbacks
-// This catches http://localhost:{AUTH_SERVER_PORT}/auth/callback?code=xxx and /callback (for MCP OAuth)
-const server = createServer((req, res) => {
+// Auth server retry logic for port conflicts (Windows)
+let retryCount = 0
+const MAX_RETRIES = 1
+const RETRY_DELAY_MS = 2000
+
+function createAuthServer() {
+  return createServer((req, res) => {
     const url = new URL(req.url || "", `http://localhost:${AUTH_SERVER_PORT}`)
 
     // Serve favicon
@@ -463,10 +468,35 @@ const server = createServer((req, res) => {
       res.end("Not found")
     }
   })
+}
 
-server.listen(AUTH_SERVER_PORT, () => {
-  console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
-})
+function startAuthServer(): void {
+  const server = createAuthServer()
+
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") {
+      retryCount++
+      if (retryCount <= MAX_RETRIES) {
+        console.warn(`[Auth Server] Port ${AUTH_SERVER_PORT} is in use. Retrying...`)
+        server.close()
+        setTimeout(() => startAuthServer(), RETRY_DELAY_MS)
+        return
+      }
+      const { dialog } = require("electron")
+      dialog.showErrorBox("Port Conflict", `Port ${AUTH_SERVER_PORT} is already in use.`)
+      app.quit()
+    }
+  })
+
+  server.on("listening", () => {
+    console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
+    retryCount = 0
+  })
+
+  server.listen(AUTH_SERVER_PORT)
+}
+
+startAuthServer()
 
 // Clean up stale lock files from crashed instances
 // Returns true if locks were cleaned, false otherwise
@@ -880,8 +910,20 @@ if (gotTheLock) {
       console.error("[App] Failed to initialize database:", error)
     }
 
-    // Create main window
-    createMainWindow()
+    try {
+      registerIpcHandlersEarly()
+      console.log("[App] IPC handlers registered")
+    } catch (error) {
+      console.error("[App] Failed to register IPC handlers:", error)
+    }
+
+    try {
+      createMainWindow()
+      console.log("[App] Main window created")
+    } catch (error) {
+      console.error("[App] Failed to create main window:", error)
+      throw error
+    }
 
     // Initialize auto-updater (production only)
     if (app.isPackaged) {

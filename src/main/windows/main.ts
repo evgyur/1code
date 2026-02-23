@@ -19,8 +19,8 @@ import { registerGitWatcherIPC } from "../lib/git/watcher"
 import { registerThemeScannerIPC } from "../lib/vscode-theme-scanner"
 import { windowManager } from "./window-manager"
 
-// Helper to get window from IPC event
-function getWindowFromEvent(
+// Helper to get window from IPC event (exported for auth flow)
+export function getWindowFromEvent(
   event: Electron.IpcMainInvokeEvent,
 ): BrowserWindow | null {
   const webContents = event.sender
@@ -30,6 +30,16 @@ function getWindowFromEvent(
 
 // Register IPC handlers for window operations (only once)
 let ipcHandlersRegistered = false
+
+export function registerIpcHandlersEarly(): void {
+  try {
+    registerIpcHandlers()
+    console.log("[Main] IPC handlers registered successfully")
+  } catch (error) {
+    console.error("[Main] Failed to register IPC handlers:", error)
+    throw error
+  }
+}
 
 function registerIpcHandlers(): void {
   if (ipcHandlersRegistered) return
@@ -364,10 +374,23 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle("auth:start-flow", (event) => {
-    if (!validateSender(event)) return
-    const win = getWindowFromEvent(event)
-    getAuthManager().startAuthFlow(win)
+  ipcMain.handle("auth:start-flow", async (event) => {
+    console.log("[Auth IPC] start-flow handler called")
+    if (!validateSender(event)) {
+      throw new Error("Invalid sender")
+    }
+    try {
+      const authManager = getAuthManager()
+      if (!authManager) {
+        throw new Error("Auth manager not initialized")
+      }
+      const win = getWindowFromEvent(event)
+      await authManager.startAuthFlow(win)
+      console.log("[Auth IPC] Auth flow started successfully")
+    } catch (error) {
+      console.error("[Auth IPC] Failed to start auth flow:", error)
+      throw error
+    }
   })
 
   ipcMain.handle("auth:submit-code", async (event, code: string) => {

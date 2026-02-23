@@ -868,7 +868,7 @@ export const claudeRouter = router({
             ...(process.env.NODE_ENV !== "production" && {
               debugInfo: {
                 context,
-                cwd: input.cwd,
+                cwd: resolvedCwd,
                 mode: input.mode,
                 PATH: process.env.PATH?.slice(0, 200),
               },
@@ -879,6 +879,53 @@ export const claudeRouter = router({
         ;(async () => {
           try {
             const db = getDatabase()
+
+            // Resolve relative CWD paths to absolute (Windows fix)
+            const originalCwd = input.cwd
+            let resolvedCwd = input.cwd
+            if (input.cwd && !path.isAbsolute(input.cwd)) {
+              const homeDir = os.homedir()
+              resolvedCwd = path.resolve(homeDir, input.cwd)
+              console.log(`[claude] Resolved relative CWD: ${originalCwd} → ${resolvedCwd}`)
+            }
+
+            // Get chat to find worktree path as fallback
+            const chat = db.select().from(chats).where(eq(chats.id, input.chatId)).get()
+
+            // Fallback: if resolvedCwd doesn't exist, try worktreePath or projectPath
+            if (chat) {
+              const worktreePath = chat.worktreePath as string | null
+              const projectPath = chat.projectPath as string | null
+
+              if (resolvedCwd) {
+                try {
+                  await fs.access(resolvedCwd)
+                } catch {
+                  if (worktreePath) {
+                    try {
+                      await fs.access(worktreePath)
+                      resolvedCwd = worktreePath
+                    } catch {
+                      if (projectPath) {
+                        try {
+                          await fs.access(projectPath)
+                          resolvedCwd = projectPath
+                        } catch {}
+                      }
+                    }
+                  } else if (projectPath) {
+                    try {
+                      await fs.access(projectPath)
+                      resolvedCwd = projectPath
+                    } catch {}
+                  }
+                }
+              } else if (worktreePath) {
+                resolvedCwd = worktreePath
+              } else if (projectPath) {
+                resolvedCwd = projectPath
+              }
+            }
 
             // 1. Get existing messages from DB
             const existing = db
@@ -1039,7 +1086,7 @@ export const claudeRouter = router({
             // Build agents option for SDK (proper registration via options.agents)
             const agentsOption = await buildAgentsOption(
               agentMentions,
-              input.cwd,
+              resolvedCwd,
             )
 
             // Log if agents were mentioned
@@ -1202,7 +1249,7 @@ export const claudeRouter = router({
                 const stats = await fs.stat(claudeJsonSource).catch(() => null)
                 const currentMtime = stats?.mtimeMs ?? 0
                 const cached = mcpConfigCache.get(claudeJsonSource)
-                const lookupPath = input.projectPath || input.cwd
+                const lookupPath = input.projectPath || resolvedCwd
 
                 // Get or refresh cached config
                 let claudeConfig: any
@@ -1376,7 +1423,7 @@ export const claudeRouter = router({
               input.sessionId || existingSessionId || undefined
 
             // DEBUG: Session resume path tracing
-            const expectedSanitizedCwd = input.cwd.replace(/[/.]/g, "-")
+            const expectedSanitizedCwd = resolvedCwd.replace(/[/.]/g, "-")
             const expectedSessionPath = path.join(
               isolatedConfigDir,
               "projects",
@@ -1385,7 +1432,7 @@ export const claudeRouter = router({
             )
             console.log(`[claude] ========== SESSION DEBUG ==========`)
             console.log(`[claude] subChatId: ${input.subChatId}`)
-            console.log(`[claude] cwd: ${input.cwd}`)
+            console.log(`[claude] cwd: ${resolvedCwd}`)
             console.log(
               `[claude] sanitized cwd (expected): ${expectedSanitizedCwd}`,
             )
@@ -1404,7 +1451,7 @@ export const claudeRouter = router({
             console.log(`[claude] ========== END SESSION DEBUG ==========`)
 
             console.log(
-              `[SD] Query options - cwd: ${input.cwd}, projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`,
+              `[SD] Query options - cwd: ${resolvedCwd}, projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`,
             )
             if (finalCustomConfig) {
               const redactedConfig = {
@@ -1484,7 +1531,7 @@ export const claudeRouter = router({
                 mcpServersForSdk &&
                 Object.keys(mcpServersForSdk).length > 0
               ) {
-                const lookupPath = input.projectPath || input.cwd
+                const lookupPath = input.projectPath || resolvedCwd
                 mcpServersFiltered = await ensureMcpTokensFresh(
                   mcpServersForSdk,
                   lookupPath,
@@ -1499,7 +1546,7 @@ export const claudeRouter = router({
               console.log("[Ollama Debug] SDK Configuration:", {
                 model: resolvedModel,
                 baseUrl: finalEnv.ANTHROPIC_BASE_URL,
-                cwd: input.cwd,
+                cwd: resolvedCwd,
                 configDir: isolatedConfigDir,
                 hasAuthToken: !!finalEnv.ANTHROPIC_AUTH_TOKEN,
                 tokenPreview:
@@ -1517,7 +1564,7 @@ export const claudeRouter = router({
             // Read AGENTS.md from project root if it exists
             let agentsMdContent: string | undefined
             try {
-              const agentsMdPath = path.join(input.cwd, "AGENTS.md")
+              const agentsMdPath = path.join(resolvedCwd, "AGENTS.md")
               agentsMdContent = await fs.readFile(agentsMdPath, "utf-8")
               if (agentsMdContent.trim()) {
                 console.log(
@@ -1630,8 +1677,8 @@ ${history}
 
               const ollamaContext = `[CONTEXT]
 You are a coding assistant in OFFLINE mode (Ollama model: ${resolvedModel || "unknown"}).
-Project: ${input.projectPath || input.cwd}
-Working directory: ${input.cwd}
+Project: ${input.projectPath || resolvedCwd}
+Working directory: ${resolvedCwd}
 
 IMPORTANT: When using tools, use these EXACT parameter names:
 - Read: use "file_path" (not "file")
@@ -1677,7 +1724,7 @@ ${prompt}
               prompt: finalQueryPrompt,
               options: {
                 abortController, // Must be inside options!
-                cwd: input.cwd,
+                cwd: resolvedCwd,
                 systemPrompt: systemPromptConfig,
                 // Register mentioned agents with SDK via options.agents (skip for Ollama - not supported)
                 ...(!isUsingOllama &&
@@ -1978,7 +2025,7 @@ ${prompt}
                 console.log(
                   `[Ollama] Prompt: "${typeof input.prompt === "string" ? input.prompt.slice(0, 100) : "N/A"}..."`,
                 )
-                console.log(`[Ollama] CWD: ${input.cwd}`)
+                console.log(`[Ollama] CWD: ${resolvedCwd}`)
               }
 
               try {
@@ -2068,7 +2115,7 @@ ${prompt}
                       `[CLAUDE SDK ERROR] SubChat ID: ${input.subChatId}`,
                     )
                     console.error(`[CLAUDE SDK ERROR] Chat ID: ${input.chatId}`)
-                    console.error(`[CLAUDE SDK ERROR] CWD: ${input.cwd}`)
+                    console.error(`[CLAUDE SDK ERROR] CWD: ${resolvedCwd}`)
                     console.error(`[CLAUDE SDK ERROR] Mode: ${input.mode}`)
                     console.error(
                       `[CLAUDE SDK ERROR] Session ID: ${msgAny.session_id || "none"}`,
@@ -2475,7 +2522,7 @@ ${prompt}
                       },
                       extra: {
                         context: errorContext,
-                        cwd: input.cwd,
+                        cwd: resolvedCwd,
                         stderr: stderrOutput || "(no stderr captured)",
                         chatId: input.chatId,
                         subChatId: input.subChatId,
@@ -2496,7 +2543,7 @@ ${prompt}
                     debugInfo: {
                       context: errorContext,
                       category: errorCategory,
-                      cwd: input.cwd,
+                      cwd: resolvedCwd,
                       mode: input.mode,
                       stderr: stderrOutput || "(no stderr captured)",
                     },
@@ -2533,9 +2580,9 @@ ${prompt}
                     .run()
 
                   // Create snapshot stash for rollback support (on error)
-                  if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
+                  if (historyEnabled && metadata.sdkMessageUuid && resolvedCwd) {
                     await createRollbackStash(
-                      input.cwd,
+                      resolvedCwd,
                       metadata.sdkMessageUuid,
                     )
                   }
@@ -2627,8 +2674,8 @@ ${prompt}
               .run()
 
             // Create snapshot stash for rollback support
-            if (historyEnabled && metadata.sdkMessageUuid && input.cwd) {
-              await createRollbackStash(input.cwd, metadata.sdkMessageUuid)
+            if (historyEnabled && metadata.sdkMessageUuid && resolvedCwd) {
+              await createRollbackStash(resolvedCwd, metadata.sdkMessageUuid)
             }
 
             const duration = ((Date.now() - streamStart) / 1000).toFixed(1)
