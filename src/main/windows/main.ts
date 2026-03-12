@@ -29,7 +29,7 @@ export function setIsQuitting(value: boolean): void {
 }
 
 // Helper to get window from IPC event
-function getWindowFromEvent(
+export function getWindowFromEvent(
   event: Electron.IpcMainInvokeEvent,
 ): BrowserWindow | null {
   const webContents = event.sender
@@ -373,10 +373,23 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle("auth:start-flow", (event) => {
-    if (!validateSender(event)) return
-    const win = getWindowFromEvent(event)
-    getAuthManager().startAuthFlow(win)
+  ipcMain.handle("auth:start-flow", async (event) => {
+    console.log("[Auth IPC] start-flow handler called")
+    if (!validateSender(event)) {
+      throw new Error("Invalid sender")
+    }
+    try {
+      const authManager = getAuthManager()
+      if (!authManager) {
+        throw new Error("Auth manager not initialized")
+      }
+      const win = getWindowFromEvent(event)
+      await authManager.startAuthFlow(win)
+      console.log("[Auth IPC] Auth flow started successfully")
+    } catch (error) {
+      console.error("[Auth IPC] Failed to start auth flow:", error)
+      throw error
+    }
   })
 
   ipcMain.handle("auth:submit-code", async (event, code: string) => {
@@ -856,6 +869,16 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
 /**
  * Create the main application window (alias for createWindow for backwards compatibility)
  */
+export function registerIpcHandlersEarly(): void {
+  try {
+    registerIpcHandlers()
+    console.log("[Main] IPC handlers registered successfully")
+  } catch (error) {
+    console.error("[Main] Failed to register IPC handlers:", error)
+    throw error
+  }
+}
+
 export function createMainWindow(): BrowserWindow {
   return createWindow()
 }

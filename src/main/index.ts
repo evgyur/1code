@@ -35,6 +35,7 @@ import {
   createWindow,
   getWindow,
   getAllWindows,
+  registerIpcHandlersEarly,
   setIsQuitting,
 } from "./windows/main"
 import { windowManager } from "./windows/window-manager"
@@ -469,9 +470,36 @@ const server = createServer((req, res) => {
     }
   })
 
-server.listen(AUTH_SERVER_PORT, () => {
-  console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
-})
+// Auth server retry logic for port conflicts
+let retryCount = 0
+const MAX_RETRIES = 1
+const RETRY_DELAY_MS = 2000
+
+function startAuthServer(): void {
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") {
+      retryCount++
+      if (retryCount <= MAX_RETRIES) {
+        console.warn(`[Auth Server] Port ${AUTH_SERVER_PORT} is in use. Retrying...`)
+        server.close()
+        setTimeout(() => startAuthServer(), RETRY_DELAY_MS)
+        return
+      }
+      const { dialog } = require("electron")
+      dialog.showErrorBox("Port Conflict", `Port ${AUTH_SERVER_PORT} is already in use.`)
+      app.quit()
+    }
+  })
+
+  server.on("listening", () => {
+    console.log(`[Auth Server] Listening on http://localhost:${AUTH_SERVER_PORT}`)
+    retryCount = 0
+  })
+
+  server.listen(AUTH_SERVER_PORT)
+}
+
+startAuthServer()
 
 // Clean up stale lock files from crashed instances
 // Returns true if locks were cleaned, false otherwise
@@ -939,8 +967,22 @@ if (gotTheLock) {
       console.error("[App] Failed to initialize database:", error)
     }
 
+    // Register IPC handlers early before window creation
+    try {
+      registerIpcHandlersEarly()
+      console.log("[App] IPC handlers registered")
+    } catch (error) {
+      console.error("[App] Failed to register IPC handlers:", error)
+    }
+
     // Create main window
-    createMainWindow()
+    try {
+      createMainWindow()
+      console.log("[App] Main window created")
+    } catch (error) {
+      console.error("[App] Failed to create main window:", error)
+      throw error
+    }
 
     // Initialize auto-updater (production only)
     if (app.isPackaged) {
