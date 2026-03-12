@@ -880,5 +880,11 @@ export function registerIpcHandlersEarly(): void {
 }
 
 export function createMainWindow(): BrowserWindow {
+  const existing = BrowserWindow.getAllWindows().find((win) => !win.isDestroyed())
+  if (existing) {
+    if (existing.isMinimized()) existing.restore()
+    existing.focus()
+    return existing
+  }
   return createWindow()
 }
