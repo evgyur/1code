@@ -574,8 +574,11 @@ if (gotTheLock) {
       if (window.isMinimized()) window.restore()
       window.focus()
     } else {
-      // No windows open, create a new one
-      createMainWindow()
+      // Avoid duplicate windows if a second-instance event arrives during startup.
+      // In that case, the normal whenReady flow will create the first window.
+      if (app.isReady()) {
+        createMainWindow()
+      }
     }
   })
 
